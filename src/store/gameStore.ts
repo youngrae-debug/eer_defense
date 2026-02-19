@@ -591,6 +591,7 @@ function updateMonsters(lines: LineState[], deltaMs: number): { lifeLoss: number
             line.cachedPath = aStar(line.grid, line.spawn, line.goal) ?? [];
           }
         }
+        monster.state = line.cachedPath.length > 0 ? 'moving' : 'attacking';
       }
 
       if (monster.state === 'moving') {

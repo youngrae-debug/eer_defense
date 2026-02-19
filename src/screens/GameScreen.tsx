@@ -224,6 +224,7 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     gap: theme.spacing.sm,
+    flexWrap: 'wrap',
   },
   fieldColumn: {
     flex: 1,
