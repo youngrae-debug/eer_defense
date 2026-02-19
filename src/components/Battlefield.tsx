@@ -1,14 +1,19 @@
-import { DimensionValue, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { DimensionValue, LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import type { Defender, Enemy, Point } from '@/src/store/gameStore';
+import type { Defender, Enemy, Point, Worker } from '@/src/store/gameStore';
 import { theme } from '@/src/theme/theme';
 
 interface BattlefieldProps {
-  lanes: Point[][];
+  lane: Point[];
   castlePosition: Point;
   defenders: Defender[];
   enemies: Enemy[];
+  workers: Worker[];
+  selectedWorkerId: string | null;
+  isTowerPlacementMode: boolean;
   progressLabel: string;
+  onPressMap: (point: Point) => void;
 }
 
 function pointToStyle(point: Point): { left: DimensionValue; top: DimensionValue } {
@@ -18,23 +23,28 @@ function pointToStyle(point: Point): { left: DimensionValue; top: DimensionValue
   };
 }
 
-export function Battlefield({ lanes, castlePosition, defenders, enemies, progressLabel }: BattlefieldProps) {
-  const laneDots = lanes.flatMap((lane, laneIndex) =>
-    lane.map((point, pointIndex) => (
-      <View
-        key={`lane-${laneIndex}-point-${pointIndex}`}
-        style={[styles.pathDot, pointToStyle(point)]}
-      />
-    ))
-  );
+export function Battlefield({
+  lane,
+  castlePosition,
+  defenders,
+  enemies,
+  workers,
+  selectedWorkerId,
+  isTowerPlacementMode,
+  progressLabel,
+  onPressMap,
+}: BattlefieldProps) {
+  const [canvasSize, setCanvasSize] = useState({ width: 1, height: 1 });
+
+  const laneDots = lane.map((point, pointIndex) => (
+    <View key={`point-${pointIndex}`} style={[styles.pathDot, pointToStyle(point)]} />
+  ));
 
   const defenderNodes = defenders.map((defender) => {
-    const color = defender.unitType === 'hero' ? theme.colors.secondary : theme.colors.primary;
+    const color = defender.kind === 'hero' ? theme.colors.secondary : theme.colors.primary;
     return (
       <View key={defender.id} style={[styles.defender, pointToStyle(defender.position), { borderColor: color }]}>
-        <Text style={styles.markerLabel}>
-          {defender.unitType === 'hero' ? 'H' : defender.unitType === 'marine' ? 'M' : 'F'}
-        </Text>
+        <Text style={styles.markerLabel}>{defender.kind === 'hero' ? 'H' : defender.level === 2 ? 'T2' : 'T1'}</Text>
       </View>
     );
   });
@@ -45,18 +55,44 @@ export function Battlefield({ lanes, castlePosition, defenders, enemies, progres
     </View>
   ));
 
+  const workerNodes = workers.map((worker) => (
+    <View
+      key={worker.id}
+      style={[
+        styles.worker,
+        pointToStyle(worker.position),
+        selectedWorkerId === worker.id && styles.selectedWorker,
+      ]}
+    >
+      <Text style={styles.workerLabel}>W</Text>
+    </View>
+  ));
+
   return (
     <View style={styles.mapArea}>
-      <Text style={styles.mapLabel}>6-Lane Defense Field</Text>
+      <Text style={styles.mapLabel}>Selected Lane Field</Text>
       <Text style={styles.subLabel}>{progressLabel}</Text>
-      <View style={styles.mapCanvas}>
+      <Pressable
+        style={[styles.mapCanvas, isTowerPlacementMode && styles.mapPlacementMode]}
+        onLayout={(event: LayoutChangeEvent) => {
+          const { width, height } = event.nativeEvent.layout;
+          setCanvasSize({ width: Math.max(1, width), height: Math.max(1, height) });
+        }}
+        onPress={(event) => {
+          const { locationX, locationY } = event.nativeEvent;
+          const x = Math.max(4, Math.min(96, (locationX / canvasSize.width) * 100));
+          const y = Math.max(4, Math.min(96, (locationY / canvasSize.height) * 100));
+          onPressMap({ x, y });
+        }}
+      >
         {laneDots}
         <View style={[styles.castle, pointToStyle(castlePosition)]}>
           <Text style={styles.castleLabel}>CASTLE</Text>
         </View>
         {defenderNodes}
+        {workerNodes}
         {enemyNodes}
-      </View>
+      </Pressable>
     </View>
   );
 }
@@ -90,6 +126,10 @@ const styles = StyleSheet.create({
     borderColor: '#1E293B',
     overflow: 'hidden',
   },
+  mapPlacementMode: {
+    borderColor: theme.colors.gold,
+    borderWidth: 2,
+  },
   pathDot: {
     position: 'absolute',
     width: 8,
@@ -118,18 +158,39 @@ const styles = StyleSheet.create({
   },
   defender: {
     position: 'absolute',
-    width: 20,
-    height: 20,
+    width: 22,
+    height: 22,
     borderRadius: theme.radius.pill,
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#0F172A',
-    transform: [{ translateX: -10 }, { translateY: -10 }],
+    transform: [{ translateX: -11 }, { translateY: -11 }],
   },
   markerLabel: {
     color: theme.colors.textPrimary,
-    fontSize: 10,
+    fontSize: 8,
+    fontWeight: '700',
+  },
+  worker: {
+    position: 'absolute',
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: '#64748B',
+    backgroundColor: '#1E293B',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transform: [{ translateX: -9 }, { translateY: -9 }],
+  },
+  selectedWorker: {
+    borderColor: theme.colors.gold,
+    borderWidth: 2,
+  },
+  workerLabel: {
+    color: theme.colors.textPrimary,
+    fontSize: 9,
     fontWeight: '700',
   },
   enemy: {
