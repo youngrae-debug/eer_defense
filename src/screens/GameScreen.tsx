@@ -1,18 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Battlefield } from '@/src/components/Battlefield';
+import { CommandCard } from '@/src/components/CommandCard';
 import { HeroCard } from '@/src/components/HeroCard';
 import { HUD } from '@/src/components/HUD';
 import { MiniMap } from '@/src/components/MiniMap';
 import { PrimaryButton } from '@/src/components/PrimaryButton';
-import { ShopPanel } from '@/src/components/ShopPanel';
+import { SelectionPanel } from '@/src/components/SelectionPanel';
 import { SkillButton } from '@/src/components/SkillButton';
 import { useGameStore } from '@/src/store/gameStore';
 import { theme } from '@/src/theme/theme';
-
-type BottomTab = 'battle' | 'shop' | 'workers';
 
 function orientPoint(point: { x: number; y: number }) {
   return {
@@ -34,32 +33,31 @@ export function GameScreen() {
     gold,
     lines,
     selectedLine,
-    selectedWorkerId,
-    isTowerPlacementMode,
+    selectedEntity,
+    pendingCommand,
+    previewTile,
     heroUnits,
     wave,
     selectedHero,
     skill,
     selectLane,
-    selectWorker,
-    startTowerPlacementMode,
-    cancelTowerPlacementMode,
-    requestBuildAtTile,
-    buyWorker,
-    upgradeSelectedWorkerTower,
+    issueCommand,
+    cancelCommand,
+    mapHoverTile,
+    mapClickTile,
     startNextWave,
+    buyWorker,
     summonHero,
     evolveHero,
     triggerSkill,
   } = useGameStore();
 
-  const [activeTab, setActiveTab] = useState<BottomTab>('battle');
   const line = lines[selectedLine];
 
   const lanePath = useMemo(() => line.cachedPath.map((p) => orientPoint(tileToPercent(p))), [line.cachedPath]);
 
-  const laneDefenders = useMemo(() => {
-    const defs = line.towers.map((tower) => ({
+  const defenders = useMemo(() => {
+    const towers = line.towers.map((tower) => ({
       id: tower.id,
       kind: 'tower' as const,
       position: orientPoint(tileToPercent({ x: tower.x, y: tower.y })),
@@ -75,107 +73,31 @@ export function GameScreen() {
         level: hero.level,
       }));
 
-    return defs.concat(heroes);
+    return towers.concat(heroes);
   }, [heroUnits, line.towers, selectedLine]);
 
-  const laneWorkers = useMemo(
-    () => line.workers.map((worker) => ({ ...worker, ...orientPoint(tileToPercent({ x: worker.x, y: worker.y })) })),
+  const workers = useMemo(
+    () => line.workers.map((worker) => ({ id: worker.id, state: worker.state, ...orientPoint(tileToPercent({ x: worker.x, y: worker.y })) })),
     [line.workers]
   );
 
-  const laneEnemies = useMemo(
-    () =>
-      line.monsters.map((monster) => ({
-        id: monster.id,
-        hp: monster.hp,
-        maxHp: 180,
-        position: orientPoint(tileToPercent({ x: monster.x, y: monster.y })),
-      })),
+  const enemies = useMemo(
+    () => line.monsters.map((monster) => ({ id: monster.id, hp: monster.hp, maxHp: 180, position: orientPoint(tileToPercent({ x: monster.x, y: monster.y })) })),
     [line.monsters]
   );
 
+  const buildPreview = useMemo(() => {
+    if (!previewTile || pendingCommand?.type !== 'BUILD_SUNKEN') {
+      return null;
+    }
+    const tile = line.grid[previewTile.y]?.[previewTile.x];
+    return {
+      point: orientPoint(tileToPercent(previewTile)),
+      valid: Boolean(tile?.walkable && !tile?.towerId),
+    };
+  }, [line.grid, pendingCommand?.type, previewTile]);
+
   const cooldownRemainingMs = Math.max(0, skill.cooldown - (performance.now() - skill.lastUsed));
-
-  const progressLabel =
-    wave.active || wave.enemiesToSpawn > 0
-      ? `Line ${selectedLine + 1} · Wave ${wave.waveNumber} · Enemies ${line.monsters.length}`
-      : `Line ${selectedLine + 1} 준비 완료`;
-
-  const renderBottomPanel = () => {
-    if (activeTab === 'shop') {
-      return (
-        <ShopPanel
-          onBuyWorker={buyWorker}
-          onStartPlacement={startTowerPlacementMode}
-          onUpgradeTower={upgradeSelectedWorkerTower}
-          onSummonHero={summonHero}
-          onSummonMarine={() => {}}
-          onSummonFirebat={() => {}}
-        />
-      );
-    }
-
-    if (activeTab === 'workers') {
-      return (
-        <View style={styles.workersPanel}>
-          <Text style={styles.panelTitle}>Workers (1 Worker = 1 Tower)</Text>
-          <View style={styles.workerRow}>
-            {laneWorkers.map((worker) => (
-              <Pressable
-                key={worker.id}
-                onPress={() => {
-                  selectWorker(worker.id);
-                }}
-                style={[styles.workerChip, selectedWorkerId === worker.id && styles.workerChipActive]}
-              >
-                <Text style={styles.workerChipLabel}>
-                  {worker.id.replace('worker-', 'W')} · {worker.assignedTowerId ? 'Tower Ready' : worker.state}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-          <View style={styles.workerActions}>
-            <PrimaryButton
-              onPress={() => {
-                if (isTowerPlacementMode) {
-                  cancelTowerPlacementMode();
-                } else {
-                  startTowerPlacementMode();
-                }
-              }}
-              style={styles.workerActionButton}
-            >
-              {isTowerPlacementMode ? 'Cancel Build Mode' : 'Build Mode'}
-            </PrimaryButton>
-            <PrimaryButton onPress={upgradeSelectedWorkerTower} style={styles.workerActionButton}>
-              Upgrade Tower
-            </PrimaryButton>
-          </View>
-        </View>
-      );
-    }
-
-    return (
-      <View style={styles.battlePanel}>
-        <HeroCard hero={selectedHero} />
-        <View style={styles.battleActions}>
-          <PrimaryButton onPress={startNextWave} style={styles.startButton} disabled={wave.active}>
-            Start Wave
-          </PrimaryButton>
-          <PrimaryButton onPress={evolveHero} style={styles.startButton}>
-            Evolve Hero
-          </PrimaryButton>
-          <SkillButton
-            label="Skill"
-            isCoolingDown={cooldownRemainingMs > 0}
-            cooldownRemainingMs={cooldownRemainingMs}
-            cooldownTotalMs={skill.cooldown}
-            onPress={triggerSkill}
-          />
-        </View>
-      </View>
-    );
-  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -191,55 +113,74 @@ export function GameScreen() {
               }}
               style={[styles.laneButton, selectedLine === lineId && styles.laneButtonActive]}
             >
-              <Text style={[styles.laneLabel, selectedLine === lineId && styles.laneLabelActive]}>
-                Line {lineId + 1}
-              </Text>
+              <Text style={styles.laneButtonLabel}>L{lineId + 1}</Text>
             </Pressable>
           ))}
         </View>
 
-        <View style={styles.fieldWrapper}>
-          <Battlefield
-            lane={lanePath}
-            castlePosition={orientPoint(tileToPercent({ x: 16, y: 30 }))}
-            defenders={laneDefenders}
-            enemies={laneEnemies}
-            workers={laneWorkers}
-            selectedWorkerId={selectedWorkerId}
-            isTowerPlacementMode={isTowerPlacementMode}
-            progressLabel={progressLabel}
-            onPressMap={(point) => {
-              if (isTowerPlacementMode) {
+        <SelectionPanel selectedEntity={selectedEntity} />
+
+        <View style={styles.fieldRow}>
+          <View style={styles.fieldColumn}>
+            <Battlefield
+              lane={lanePath}
+              castlePosition={orientPoint(tileToPercent({ x: 16, y: 30 }))}
+              defenders={defenders}
+              enemies={enemies}
+              workers={workers}
+              selectedEntity={selectedEntity}
+              buildPreview={buildPreview}
+              progressLabel={`Line ${selectedLine + 1} · Wave ${wave.waveNumber}`}
+              onHoverMap={(point) => {
                 const tileX = Math.max(0, Math.min(31, Math.floor((point.x / 100) * 32)));
                 const tileY = Math.max(0, Math.min(31, Math.floor(((point.y - 38) / 100) * 32)));
-                requestBuildAtTile(tileX, tileY);
-              }
-            }}
-          />
-          <View style={styles.minimapWrap}>
+                mapHoverTile(tileX, tileY);
+              }}
+              onPressMap={(point) => {
+                const tileX = Math.max(0, Math.min(31, Math.floor((point.x / 100) * 32)));
+                const tileY = Math.max(0, Math.min(31, Math.floor(((point.y - 38) / 100) * 32)));
+                mapClickTile(tileX, tileY);
+              }}
+            />
+          </View>
+          <View style={styles.sideColumn}>
             <MiniMap
               lanes={lines.map((lineState) => lineState.cachedPath.map(tileToPercent))}
               castlePosition={tileToPercent({ x: 16, y: 30 })}
               selectedLane={selectedLine}
             />
+            <HeroCard hero={selectedHero} />
           </View>
         </View>
 
-        {renderBottomPanel()}
-
-        <View style={styles.tabBar}>
-          {(['battle', 'shop', 'workers'] as BottomTab[]).map((tab) => (
-            <Pressable
-              key={tab}
-              onPress={() => {
-                setActiveTab(tab);
-              }}
-              style={[styles.tabButton, activeTab === tab && styles.tabButtonActive]}
-            >
-              <Text style={[styles.tabLabel, activeTab === tab && styles.tabLabelActive]}>{tab.toUpperCase()}</Text>
-            </Pressable>
-          ))}
+        <View style={styles.actionsRow}>
+          <PrimaryButton onPress={buyWorker} style={styles.actionButton}>
+            Train Worker
+          </PrimaryButton>
+          <PrimaryButton onPress={summonHero} style={styles.actionButton}>
+            Summon Hero
+          </PrimaryButton>
+          <PrimaryButton onPress={evolveHero} style={styles.actionButton}>
+            Evolve Hero
+          </PrimaryButton>
+          <PrimaryButton onPress={startNextWave} style={styles.actionButton} disabled={wave.active}>
+            Start Wave
+          </PrimaryButton>
+          <SkillButton
+            label="Skill"
+            isCoolingDown={cooldownRemainingMs > 0}
+            cooldownRemainingMs={cooldownRemainingMs}
+            cooldownTotalMs={skill.cooldown}
+            onPress={triggerSkill}
+          />
         </View>
+
+        <CommandCard
+          selectedEntity={selectedEntity}
+          pendingCommand={pendingCommand}
+          onIssueCommand={issueCommand}
+          onCancel={cancelCommand}
+        />
       </View>
     </SafeAreaView>
   );
@@ -261,122 +202,44 @@ const styles = StyleSheet.create({
   },
   laneSelector: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     gap: theme.spacing.xs,
   },
   laneButton: {
     flex: 1,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: '#334155',
-    backgroundColor: '#111827',
-    paddingVertical: 8,
+    minHeight: 28,
+    borderRadius: theme.radius.pill,
+    backgroundColor: '#334155',
     alignItems: 'center',
+    justifyContent: 'center',
   },
   laneButtonActive: {
-    borderColor: theme.colors.primary,
-    backgroundColor: '#172554',
+    backgroundColor: theme.colors.primary,
   },
-  laneLabel: {
-    color: theme.colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
+  laneButtonLabel: {
+    color: '#E2E8F0',
+    fontSize: 11,
+    fontWeight: '700',
   },
-  laneLabelActive: {
-    color: theme.colors.textPrimary,
-  },
-  fieldWrapper: {
+  fieldRow: {
     flex: 1,
-    minHeight: 360,
-    gap: theme.spacing.sm,
-  },
-  minimapWrap: {
-    height: 100,
-  },
-  battlePanel: {
-    borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: '#334155',
-    backgroundColor: '#0F172A',
-    padding: theme.spacing.sm,
-    gap: theme.spacing.sm,
-  },
-  battleActions: {
     flexDirection: 'row',
-    alignItems: 'center',
     gap: theme.spacing.sm,
     flexWrap: 'wrap',
   },
-  startButton: {
+  fieldColumn: {
+    flex: 1,
+  },
+  sideColumn: {
+    width: 170,
+    gap: theme.spacing.sm,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  actionButton: {
     minWidth: 120,
-  },
-  workersPanel: {
-    borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: '#334155',
-    backgroundColor: '#0F172A',
-    padding: theme.spacing.sm,
-    gap: theme.spacing.sm,
-  },
-  panelTitle: {
-    color: theme.colors.textPrimary,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  workerRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: theme.spacing.xs,
-  },
-  workerChip: {
-    borderRadius: theme.radius.pill,
-    borderWidth: 1,
-    borderColor: '#475569',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: '#111827',
-  },
-  workerChipActive: {
-    borderColor: theme.colors.gold,
-    backgroundColor: '#1E293B',
-  },
-  workerChipLabel: {
-    color: theme.colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  workerActions: {
-    flexDirection: 'row',
-    gap: theme.spacing.sm,
-    flexWrap: 'wrap',
-  },
-  workerActionButton: {
-    minWidth: 130,
-  },
-  tabBar: {
-    flexDirection: 'row',
-    gap: theme.spacing.xs,
-  },
-  tabButton: {
-    flex: 1,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: '#334155',
-    backgroundColor: '#0B1220',
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  tabButtonActive: {
-    borderColor: theme.colors.primary,
-    backgroundColor: '#172554',
-  },
-  tabLabel: {
-    color: theme.colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  tabLabelActive: {
-    color: theme.colors.textPrimary,
   },
 });
