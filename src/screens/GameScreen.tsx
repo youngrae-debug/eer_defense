@@ -14,30 +14,41 @@ import { theme } from '@/src/theme/theme';
 
 type BottomTab = 'battle' | 'shop' | 'workers';
 
+function orientPoint(point: { x: number; y: number }) {
+  return {
+    x: Math.max(4, Math.min(96, point.x)),
+    y: Math.max(4, Math.min(96, point.y + 38)),
+  };
+}
+
+function tileToPercent(tile: { x: number; y: number }) {
+  return {
+    x: ((tile.x + 0.5) / 32) * 100,
+    y: ((tile.y + 0.5) / 32) * 100,
+  };
+}
+
 export function GameScreen() {
   const {
     life,
     gold,
     lanes,
-    castlePosition,
     selectedLane,
     workers,
     selectedWorkerId,
     isTowerPlacementMode,
-    defenders,
-    enemies,
+    heroUnits,
+    wave,
     selectedHero,
     skill,
-    wave,
     selectLane,
     selectWorker,
     startTowerPlacementMode,
     cancelTowerPlacementMode,
-    placeTowerForSelectedWorker,
+    requestBuildAtTile,
     buyWorker,
     upgradeSelectedWorkerTower,
     startNextWave,
-    summonUnit,
     summonHero,
     evolveHero,
     triggerSkill,
@@ -56,23 +67,67 @@ export function GameScreen() {
     };
   }, [tick]);
 
-  const laneDefenders = useMemo(
-    () => defenders.filter((defender) => defender.laneId === selectedLane || defender.kind === 'hero'),
-    [defenders, selectedLane]
+  const lane = lanes[selectedLane];
+
+  const lanePath = useMemo(
+    () => lane.cachedPath.map((p) => orientPoint(tileToPercent(p))),
+    [lane.cachedPath]
   );
+
+  const laneDefenders = useMemo(() => {
+    const defs = lane.towers.map((tower) => ({
+      id: tower.id,
+      kind: 'tower' as const,
+      unitType: tower.hp > 260 ? ('firebat' as const) : ('marine' as const),
+      position: orientPoint(tileToPercent({ x: tower.x, y: tower.y })),
+      range: 0,
+      damage: 0,
+      attackCooldownMs: 0,
+      cooldownRemainingMs: 0,
+      level: tower.hp > 260 ? 2 : 1,
+      laneId: tower.laneId,
+    }));
+
+    const heroes = heroUnits
+      .filter((hero) => hero.laneId === selectedLane)
+      .map((hero) => ({
+        id: hero.id,
+        kind: 'hero' as const,
+        unitType: 'hero' as const,
+        position: orientPoint({ x: hero.x, y: hero.y }),
+        range: 0,
+        damage: 0,
+        attackCooldownMs: 0,
+        cooldownRemainingMs: 0,
+        level: hero.level,
+        laneId: hero.laneId,
+      }));
+
+    return ([] as any[]).concat(defs, heroes);
+  }, [heroUnits, lane.towers, selectedLane]);
+
+  const laneWorkers = useMemo(() => lane.workers, [lane.workers]);
+
   const laneEnemies = useMemo(
-    () => enemies.filter((enemy) => enemy.laneId === selectedLane),
-    [enemies, selectedLane]
-  );
-  const laneWorkers = useMemo(
-    () => workers.filter((worker) => worker.laneId === selectedLane),
-    [workers, selectedLane]
+    () => lane.monsters.map((monster) => ({
+      id: monster.id,
+      laneId: monster.laneId,
+      hp: monster.hp,
+      maxHp: 180,
+      speed: monster.speed,
+      rewardGold: 0,
+      pathIndex: monster.pathIndex,
+      progress: 0,
+      alive: true,
+      position: orientPoint({ x: monster.x, y: monster.y }),
+    })),
+    [lane.monsters]
   );
 
   const progressLabel =
     wave.active || wave.enemiesToSpawn > 0
-      ? `Lane ${selectedLane + 1} · Wave ${wave.waveNumber} · Enemies ${laneEnemies.length}`
-      : `Lane ${selectedLane + 1} 준비 완료`;
+      ? `Line ${selectedLane + 1} · Wave ${wave.waveNumber} · Enemies ${lane.monsters.length}`
+      : `Line ${selectedLane + 1} 준비 완료`;
 
   const renderBottomPanel = () => {
     if (activeTab === 'shop') {
@@ -82,12 +137,8 @@ export function GameScreen() {
           onStartPlacement={startTowerPlacementMode}
           onUpgradeTower={upgradeSelectedWorkerTower}
           onSummonHero={summonHero}
-          onSummonMarine={() => {
-            summonUnit('marine');
-          }}
-          onSummonFirebat={() => {
-            summonUnit('firebat');
-          }}
+          onSummonMarine={() => {}}
+          onSummonFirebat={() => {}}
         />
       );
     }
@@ -95,9 +146,9 @@ export function GameScreen() {
     if (activeTab === 'workers') {
       return (
         <View style={styles.workersPanel}>
-          <Text style={styles.panelTitle}>Workers</Text>
+          <Text style={styles.panelTitle}>Workers (1 Worker = 1 Tower)</Text>
           <View style={styles.workerRow}>
-            {workers.map((worker) => (
+            {laneWorkers.map((worker) => (
               <Pressable
                 key={worker.id}
                 onPress={() => {
@@ -106,8 +157,7 @@ export function GameScreen() {
                 style={[styles.workerChip, selectedWorkerId === worker.id && styles.workerChipActive]}
               >
                 <Text style={styles.workerChipLabel}>
-                  {worker.id.replace('worker-', 'W')} · L{worker.laneId + 1}{' '}
-                  {worker.towerId ? 'T' : '-'}
+                  {worker.id.replace('worker-', 'W')} · {worker.towerId ? 'Tower Ready' : worker.state}
                 </Text>
               </Pressable>
             ))}
@@ -139,6 +189,9 @@ export function GameScreen() {
         <View style={styles.battleActions}>
           <PrimaryButton onPress={startNextWave} style={styles.startButton} disabled={wave.active}>
             Start Wave
+          </PrimaryButton>
+          <PrimaryButton onPress={evolveHero} style={styles.startButton}>
+            Evolve Hero
           </PrimaryButton>
           <SkillButton
             label="Skill"
@@ -175,8 +228,8 @@ export function GameScreen() {
 
         <View style={styles.fieldWrapper}>
           <Battlefield
-            lane={lanes[selectedLane]}
-            castlePosition={castlePosition}
+            lane={lanePath}
+            castlePosition={orientPoint({ x: 50, y: 50 })}
             defenders={laneDefenders}
             enemies={laneEnemies}
             workers={laneWorkers}
@@ -185,12 +238,14 @@ export function GameScreen() {
             progressLabel={progressLabel}
             onPressMap={(point) => {
               if (isTowerPlacementMode) {
-                placeTowerForSelectedWorker(point);
+                const tileX = Math.max(0, Math.min(31, Math.floor((point.x / 100) * 32)));
+                const tileY = Math.max(0, Math.min(31, Math.floor(((point.y - 38) / 100) * 32)));
+                requestBuildAtTile(tileX, tileY);
               }
             }}
           />
           <View style={styles.minimapWrap}>
-            <MiniMap lanes={lanes} castlePosition={castlePosition} selectedLane={selectedLane} />
+            <MiniMap lanes={lanes.map((laneState) => laneState.cachedPath.map(tileToPercent))} castlePosition={{ x: 50, y: 88 }} selectedLane={selectedLane} />
           </View>
         </View>
 

@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import { DimensionValue, LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import type { Defender, Enemy, Point, Worker } from '@/src/store/gameStore';
+import type { Point, Worker } from '@/src/store/gameStore';
 import { theme } from '@/src/theme/theme';
 
 interface BattlefieldProps {
   lane: Point[];
   castlePosition: Point;
-  defenders: Defender[];
-  enemies: Enemy[];
+  defenders: Array<{ id: string; kind: 'tower' | 'hero'; position: Point; level: number }>;
+  enemies: Array<{ id: string; hp: number; maxHp: number; position: Point }>;
   workers: Worker[];
   selectedWorkerId: string | null;
   isTowerPlacementMode: boolean;
@@ -60,7 +60,7 @@ export function Battlefield({
       key={worker.id}
       style={[
         styles.worker,
-        pointToStyle(worker.position),
+        pointToStyle({ x: worker.x, y: worker.y }),
         selectedWorkerId === worker.id && styles.selectedWorker,
       ]}
     >

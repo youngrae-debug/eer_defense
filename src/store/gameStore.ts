@@ -2,10 +2,50 @@ import { useSyncExternalStore } from 'react';
 
 export type UnitType = 'marine' | 'firebat' | 'hero';
 export type Rarity = 'common' | 'rare' | 'epic' | 'legendary' | 'mythic';
+export type WorkerState = 'idle' | 'moving' | 'building';
 
 export interface Point {
   x: number;
   y: number;
+}
+
+export interface Tile {
+  x: number;
+  y: number;
+  walkable: boolean;
+  towerId?: string;
+}
+
+export interface Worker {
+  id: string;
+  laneId: number;
+  x: number;
+  y: number;
+  state: WorkerState;
+  target?: Point;
+  buildStartTime?: number;
+  plannedTowerTile?: Point;
+  towerId?: string;
+}
+
+export interface Tower {
+  id: string;
+  laneId: number;
+  x: number;
+  y: number;
+  hp: number;
+  completed: boolean;
+}
+
+export interface Monster {
+  id: string;
+  laneId: number;
+  x: number;
+  y: number;
+  hp: number;
+  speed: number;
+  pathIndex: number;
+  state: 'moving' | 'attacking';
 }
 
 export interface Hero {
@@ -15,40 +55,6 @@ export interface Hero {
   range: number;
   rarity: Rarity;
   level: number;
-}
-
-export interface Defender {
-  id: string;
-  kind: 'tower' | 'hero';
-  unitType: UnitType;
-  position: Point;
-  range: number;
-  damage: number;
-  attackCooldownMs: number;
-  cooldownRemainingMs: number;
-  level: number;
-  laneId: number;
-  workerId?: string;
-}
-
-export interface Worker {
-  id: string;
-  laneId: number;
-  position: Point;
-  towerId: string | null;
-}
-
-export interface Enemy {
-  id: string;
-  hp: number;
-  maxHp: number;
-  speed: number;
-  rewardGold: number;
-  laneId: number;
-  pathIndex: number;
-  progress: number;
-  position: Point;
-  alive: boolean;
 }
 
 interface SkillState {
@@ -66,17 +72,23 @@ interface WaveState {
   spawnTimerMs: number;
 }
 
+interface LaneState {
+  id: number;
+  grid: Tile[][];
+  workers: Worker[];
+  towers: Tower[];
+  monsters: Monster[];
+  cachedPath: Point[];
+}
+
 interface GameState {
   life: number;
   gold: number;
-  castlePosition: Point;
-  lanes: Point[][];
+  lanes: LaneState[];
   selectedLane: number;
-  workers: Worker[];
   selectedWorkerId: string | null;
   isTowerPlacementMode: boolean;
-  defenders: Defender[];
-  enemies: Enemy[];
+  heroUnits: Array<{ id: string; laneId: number; x: number; y: number; level: number }>;
   wave: WaveState;
   selectedHero: Hero;
   isShopOpen: boolean;
@@ -88,217 +100,210 @@ interface GameActions {
   selectWorker: (workerId: string | null) => void;
   startTowerPlacementMode: () => void;
   cancelTowerPlacementMode: () => void;
-  placeTowerForSelectedWorker: (point: Point) => boolean;
+  requestBuildAtTile: (tileX: number, tileY: number) => boolean;
   buyWorker: () => boolean;
   upgradeSelectedWorkerTower: () => boolean;
   startNextWave: () => void;
   toggleShop: () => void;
   closeShop: () => void;
-  summonUnit: (type: Exclude<UnitType, 'hero'>) => boolean;
   summonHero: () => boolean;
   evolveHero: () => boolean;
   triggerSkill: () => void;
   tick: (deltaMs: number) => void;
 }
 
-type GameStore = GameState & GameActions;
+export type GameStore = GameState & GameActions;
 
+const GRID_SIZE = 32;
 const LANE_COUNT = 6;
-const SKILL_COOLDOWN_MS = 7000;
-const BASE_ENEMY_HP = 55;
-const START_GOLD = 650;
-
+const START_GOLD = 900;
 const WORKER_COST = 80;
 const BUILD_TOWER_COST = 100;
 const UPGRADE_TOWER_COST = 140;
 const HERO_COST = 200;
+const BUILD_DURATION_MS = 2000;
+const SKILL_COOLDOWN_MS = 7000;
+const WORKER_SPEED_TILES_PER_SEC = 7;
+const MONSTER_REWARD = 10;
+const GOAL_TILE = { x: 16, y: 30 };
+const SPAWN_TILE = { x: 16, y: 1 };
 
-const castlePosition: Point = { x: 50, y: 50 };
+let workerCounter = 0;
+let towerCounter = 0;
+let monsterCounter = 0;
+let heroCounter = 0;
 
-const lanes: Point[][] = [
-  [{ x: 2, y: 20 }, { x: 22, y: 24 }, { x: 36, y: 35 }, castlePosition],
-  [{ x: 2, y: 50 }, { x: 20, y: 50 }, { x: 34, y: 50 }, castlePosition],
-  [{ x: 2, y: 80 }, { x: 22, y: 76 }, { x: 36, y: 65 }, castlePosition],
-  [{ x: 98, y: 20 }, { x: 78, y: 24 }, { x: 64, y: 35 }, castlePosition],
-  [{ x: 98, y: 50 }, { x: 80, y: 50 }, { x: 66, y: 50 }, castlePosition],
-  [{ x: 98, y: 80 }, { x: 78, y: 76 }, { x: 64, y: 65 }, castlePosition],
-];
-
-let enemyId = 0;
-let defenderId = 0;
-let workerId = 0;
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function distance(a: Point, b: Point) {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-function getSegmentLength(path: Point[], index: number) {
-  const start = path[index];
-  const end = path[index + 1];
-  if (!start || !end) {
-    return 0;
-  }
-  return distance(start, end);
-}
-
-function getRandomCastleSpawn() {
-  const offsetX = (Math.random() - 0.5) * 8;
-  const offsetY = (Math.random() - 0.5) * 8;
-  return {
-    x: clamp(castlePosition.x + offsetX, 8, 92),
-    y: clamp(castlePosition.y + offsetY, 8, 92),
-  };
-}
-
-function createWorker(laneId: number): Worker {
-  workerId += 1;
-  return {
-    id: `worker-${workerId}`,
-    laneId,
-    position: getRandomCastleSpawn(),
-    towerId: null,
-  };
-}
-
-function createEnemy(waveNumber: number, laneId: number): Enemy {
-  const hp = BASE_ENEMY_HP + waveNumber * 18;
-  const start = lanes[laneId][0];
-  enemyId += 1;
-  return {
-    id: `enemy-${enemyId}`,
-    hp,
-    maxHp: hp,
-    speed: 11 + waveNumber * 0.75,
-    rewardGold: 12 + waveNumber * 2,
-    laneId,
-    pathIndex: 0,
-    progress: 0,
-    position: { ...start },
-    alive: true,
-  };
-}
-
-function createDefender(type: UnitType, laneId: number, position: Point, worker?: Worker): Defender {
-  defenderId += 1;
-  if (type === 'hero') {
-    return {
-      id: `defender-${defenderId}`,
-      kind: 'hero',
-      unitType: 'hero',
-      position,
-      range: 30,
-      damage: 24,
-      attackCooldownMs: 700,
-      cooldownRemainingMs: 0,
-      level: 1,
-      laneId,
-    };
-  }
-  if (type === 'firebat') {
-    return {
-      id: `defender-${defenderId}`,
-      kind: 'tower',
-      unitType: 'firebat',
-      position,
-      range: 19,
-      damage: 14,
-      attackCooldownMs: 560,
-      cooldownRemainingMs: 0,
-      level: 1,
-      laneId,
-    };
-  }
-  return {
-    id: `defender-${defenderId}`,
-    kind: 'tower',
-    unitType: 'marine',
-    position,
-    range: 25,
-    damage: 10,
-    attackCooldownMs: 500,
-    cooldownRemainingMs: 0,
-    level: 1,
-    laneId,
-    workerId: worker ? worker.id : undefined,
-  };
-}
-
-function moveEnemy(enemy: Enemy, deltaMs: number) {
-  if (!enemy.alive) {
-    return enemy;
-  }
-
-  const lane = lanes[enemy.laneId];
-  let next = { ...enemy };
-  let remainingDistance = (next.speed * deltaMs) / 1000;
-
-  while (remainingDistance > 0) {
-    const segmentLength = getSegmentLength(lane, next.pathIndex);
-    if (segmentLength <= 0) {
-      return { ...next, alive: false, position: { ...lane[lane.length - 1] } };
+function createGrid(): Tile[][] {
+  const rows: Tile[][] = [];
+  let y = 0;
+  while (y < GRID_SIZE) {
+    const row: Tile[] = [];
+    let x = 0;
+    while (x < GRID_SIZE) {
+      row.push({ x, y, walkable: true });
+      x += 1;
     }
+    rows.push(row);
+    y += 1;
+  }
+  return rows;
+}
 
-    const remainingOnSegment = segmentLength - next.progress;
+function createLane(id: number): LaneState {
+  return {
+    id,
+    grid: createGrid(),
+    workers: [],
+    towers: [],
+    monsters: [],
+    cachedPath: computePath(createGrid(), SPAWN_TILE, GOAL_TILE),
+  };
+}
 
-    if (remainingDistance >= remainingOnSegment) {
-      next.pathIndex += 1;
-      next.progress = 0;
-      remainingDistance -= remainingOnSegment;
+function cloneLane(lane: LaneState): LaneState {
+  const grid = lane.grid.map((row) => row.map((tile) => ({ ...tile })));
+  return {
+    id: lane.id,
+    grid,
+    workers: lane.workers.map((worker) => ({ ...worker })),
+    towers: lane.towers.map((tower) => ({ ...tower })),
+    monsters: lane.monsters.map((monster) => ({ ...monster })),
+    cachedPath: lane.cachedPath.map((p) => ({ ...p })),
+  };
+}
 
-      if (next.pathIndex >= lane.length - 1) {
-        return { ...next, alive: false, position: { ...lane[lane.length - 1] } };
+function inBounds(x: number, y: number): boolean {
+  return x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE;
+}
+
+function computePath(grid: Tile[][], start: Point, goal: Point): Point[] {
+  const queue: Point[] = [{ x: start.x, y: start.y }];
+  const visited: boolean[][] = [];
+  const parent: Array<Array<Point | null>> = [];
+
+  let y = 0;
+  while (y < GRID_SIZE) {
+    const visitedRow: boolean[] = [];
+    const parentRow: Array<Point | null> = [];
+    let x = 0;
+    while (x < GRID_SIZE) {
+      visitedRow.push(false);
+      parentRow.push(null);
+      x += 1;
+    }
+    visited.push(visitedRow);
+    parent.push(parentRow);
+    y += 1;
+  }
+
+  visited[start.y][start.x] = true;
+
+  let qi = 0;
+  const dirs = [
+    { x: 1, y: 0 },
+    { x: -1, y: 0 },
+    { x: 0, y: 1 },
+    { x: 0, y: -1 },
+  ];
+
+  while (qi < queue.length) {
+    const cur = queue[qi];
+    qi += 1;
+
+    if (cur.x === goal.x && cur.y === goal.y) {
+      const path: Point[] = [];
+      let node: Point | null = cur;
+      while (node) {
+        path.push({ x: node.x, y: node.y });
+        node = parent[node.y][node.x];
       }
-    } else {
-      next.progress += remainingDistance;
-      remainingDistance = 0;
+      path.reverse();
+      return path;
+    }
+
+    let di = 0;
+    while (di < dirs.length) {
+      const nx = cur.x + dirs[di].x;
+      const ny = cur.y + dirs[di].y;
+      if (inBounds(nx, ny) && !visited[ny][nx] && grid[ny][nx].walkable) {
+        visited[ny][nx] = true;
+        parent[ny][nx] = cur;
+        queue.push({ x: nx, y: ny });
+      }
+      di += 1;
     }
   }
 
-  const start = lane[next.pathIndex];
-  const end = lane[next.pathIndex + 1];
-  const segmentLength = getSegmentLength(lane, next.pathIndex);
-  const ratio = segmentLength > 0 ? next.progress / segmentLength : 0;
+  return [];
+}
 
-  next.position = {
-    x: start.x + (end.x - start.x) * ratio,
-    y: start.y + (end.y - start.y) * ratio,
+function tileToPercent(tile: Point): Point {
+  return {
+    x: ((tile.x + 0.5) / GRID_SIZE) * 100,
+    y: ((tile.y + 0.5) / GRID_SIZE) * 100,
   };
+}
 
-  return next;
+function laneToDisplay(point: Point): Point {
+  const center = { x: 50, y: 88 };
+  const dx = point.x - 50;
+  const dy = point.y - 50;
+  return {
+    x: Math.max(4, Math.min(96, center.x + dx)),
+    y: Math.max(4, Math.min(96, center.y + dy)),
+  };
+}
+
+function getSelectedLane(lanes: LaneState[], selectedLane: number): LaneState {
+  let i = 0;
+  while (i < lanes.length) {
+    if (lanes[i].id === selectedLane) {
+      return lanes[i];
+    }
+    i += 1;
+  }
+  return lanes[0];
 }
 
 let state: GameStore;
 
-const listeners = new Set<() => void>();
+const listeners: Array<() => void> = [];
 
 function setState(partial: Partial<GameStore>) {
   state = { ...state, ...partial };
-  listeners.forEach((listener) => listener());
+  let i = 0;
+  while (i < listeners.length) {
+    listeners[i]();
+    i += 1;
+  }
 }
 
 function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  listeners.push(listener);
+  return () => {
+    const idx = listeners.indexOf(listener);
+    if (idx >= 0) {
+      listeners.splice(idx, 1);
+    }
+  };
 }
 
 function initializeStore(): GameStore {
+  const lanesData: LaneState[] = [];
+  let laneId = 0;
+  while (laneId < LANE_COUNT) {
+    lanesData.push(createLane(laneId));
+    laneId += 1;
+  }
+
   return {
     life: 20,
     gold: START_GOLD,
-    castlePosition,
-    lanes,
+    lanes: lanesData,
     selectedLane: 0,
-    workers: [],
     selectedWorkerId: null,
     isTowerPlacementMode: false,
-    defenders: [],
-    enemies: [],
+    heroUnits: [],
     wave: {
       active: false,
       waveNumber: 0,
@@ -321,17 +326,26 @@ function initializeStore(): GameStore {
       cooldownRemainingMs: 0,
       cooldownTotalMs: SKILL_COOLDOWN_MS,
     },
-    selectLane: (laneId) => {
-      if (laneId < 0 || laneId >= LANE_COUNT) {
+    selectLane: (laneIdParam) => {
+      if (laneIdParam < 0 || laneIdParam >= LANE_COUNT) {
         return;
       }
-      setState({ selectedLane: laneId });
+      setState({ selectedLane: laneIdParam, selectedWorkerId: null, isTowerPlacementMode: false });
     },
-    selectWorker: (selectedWorkerId) => {
-      setState({ selectedWorkerId, isTowerPlacementMode: false });
+    selectWorker: (workerIdParam) => {
+      setState({ selectedWorkerId: workerIdParam, isTowerPlacementMode: false });
     },
     startTowerPlacementMode: () => {
-      const selectedWorker = state.workers.find((worker) => worker.id === state.selectedWorkerId);
+      const lane = getSelectedLane(state.lanes, state.selectedLane);
+      let selectedWorker: Worker | null = null;
+      let i = 0;
+      while (i < lane.workers.length) {
+        if (lane.workers[i].id === state.selectedWorkerId) {
+          selectedWorker = lane.workers[i];
+          break;
+        }
+        i += 1;
+      }
       if (!selectedWorker || selectedWorker.towerId) {
         return;
       }
@@ -340,34 +354,72 @@ function initializeStore(): GameStore {
     cancelTowerPlacementMode: () => {
       setState({ isTowerPlacementMode: false });
     },
-    placeTowerForSelectedWorker: (point) => {
-      const selectedWorker = state.workers.find((worker) => worker.id === state.selectedWorkerId);
-      if (!selectedWorker || selectedWorker.towerId || state.gold < BUILD_TOWER_COST) {
+    requestBuildAtTile: (tileX, tileY) => {
+      if (!state.isTowerPlacementMode || state.gold < BUILD_TOWER_COST) {
+        return false;
+      }
+      if (!inBounds(tileX, tileY)) {
         return false;
       }
 
-      const laneId = state.selectedLane;
-      const tower = createDefender('marine', laneId, point, selectedWorker);
-      const workers = state.workers.map((worker) =>
-        worker.id === selectedWorker.id ? { ...worker, towerId: tower.id, laneId } : worker
-      );
+      const lanesNext = state.lanes.map((lane) => cloneLane(lane));
+      const lane = getSelectedLane(lanesNext, state.selectedLane);
 
-      setState({
-        gold: state.gold - BUILD_TOWER_COST,
-        workers,
-        defenders: [...state.defenders, tower],
-        isTowerPlacementMode: false,
-      });
+      let selectedWorker: Worker | null = null;
+      let wi = 0;
+      while (wi < lane.workers.length) {
+        if (lane.workers[wi].id === state.selectedWorkerId) {
+          selectedWorker = lane.workers[wi];
+          break;
+        }
+        wi += 1;
+      }
+
+      if (!selectedWorker || selectedWorker.towerId) {
+        return false;
+      }
+
+      const tile = lane.grid[tileY][tileX];
+      if (!tile.walkable || tile.towerId) {
+        return false;
+      }
+
+      tile.walkable = false;
+      const pathCheck = computePath(lane.grid, SPAWN_TILE, GOAL_TILE);
+      tile.walkable = true;
+      if (pathCheck.length === 0) {
+        return false;
+      }
+
+      selectedWorker.state = 'moving';
+      selectedWorker.target = { x: tileX, y: tileY };
+      selectedWorker.plannedTowerTile = { x: tileX, y: tileY };
+      selectedWorker.buildStartTime = undefined;
+
+      setState({ lanes: lanesNext, isTowerPlacementMode: false });
       return true;
     },
     buyWorker: () => {
       if (state.gold < WORKER_COST) {
         return false;
       }
-      const worker = createWorker(state.selectedLane);
+      const lanesNext = state.lanes.map((lane) => cloneLane(lane));
+      const lane = getSelectedLane(lanesNext, state.selectedLane);
+      workerCounter += 1;
+      const spawn = laneToDisplay(tileToPercent(GOAL_TILE));
+      const worker: Worker = {
+        id: `worker-${workerCounter}`,
+        laneId: lane.id,
+        x: spawn.x + (Math.random() - 0.5) * 4,
+        y: spawn.y + (Math.random() - 0.5) * 4,
+        state: 'idle',
+        towerId: null,
+      };
+      lane.workers.push(worker);
+
       setState({
+        lanes: lanesNext,
         gold: state.gold - WORKER_COST,
-        workers: [...state.workers, worker],
         selectedWorkerId: worker.id,
       });
       return true;
@@ -376,35 +428,39 @@ function initializeStore(): GameStore {
       if (state.gold < UPGRADE_TOWER_COST || !state.selectedWorkerId) {
         return false;
       }
-      const selectedWorker = state.workers.find((worker) => worker.id === state.selectedWorkerId);
-      if (!selectedWorker || !selectedWorker.towerId) {
+
+      const lanesNext = state.lanes.map((lane) => cloneLane(lane));
+      const lane = getSelectedLane(lanesNext, state.selectedLane);
+      let targetTowerId: string | null = null;
+
+      let wi = 0;
+      while (wi < lane.workers.length) {
+        if (lane.workers[wi].id === state.selectedWorkerId) {
+          targetTowerId = lane.workers[wi].towerId || null;
+          break;
+        }
+        wi += 1;
+      }
+      if (!targetTowerId) {
         return false;
       }
 
       let upgraded = false;
-      const defenders = state.defenders.map((defender) => {
-        if (defender.id !== selectedWorker.towerId || defender.level >= 2) {
-          return defender;
-        }
-        upgraded = true;
-        return {
-          ...defender,
-          unitType: 'firebat' as const,
-          level: 2,
-          damage: 18,
-          range: 22,
-          attackCooldownMs: 460,
-        };
-      });
+      let ti = 0;
+      while (ti < lane.towers.length) {
+        if (lane.towers[ti].id === targetTowerId && lane.towers[ti].completed && lane.towers[ti].hp > 0) {
+          lane.towers[ti].hp += 150;
 
+          upgraded = true;
+          break;
+        }
+        ti += 1;
+      }
       if (!upgraded) {
         return false;
       }
 
-      setState({
-        gold: state.gold - UPGRADE_TOWER_COST,
-        defenders,
-      });
+      setState({ lanes: lanesNext, gold: state.gold - UPGRADE_TOWER_COST });
       return true;
     },
     startNextWave: () => {
@@ -412,46 +468,35 @@ function initializeStore(): GameStore {
         return;
       }
       const nextWaveNumber = state.wave.waveNumber + 1;
-      const count = 12 + nextWaveNumber * 4;
       setState({
         wave: {
           ...state.wave,
           active: true,
           waveNumber: nextWaveNumber,
-          enemiesToSpawn: count,
+          enemiesToSpawn: 18 + nextWaveNumber * 4,
           enemiesSpawned: 0,
-          spawnIntervalMs: clamp(820 - nextWaveNumber * 40, 220, 820),
+          spawnIntervalMs: clamp(900 - nextWaveNumber * 35, 220, 900),
           spawnTimerMs: 0,
         },
       });
     },
     toggleShop: () => setState({ isShopOpen: !state.isShopOpen }),
     closeShop: () => setState({ isShopOpen: false }),
-    summonUnit: (type) => {
-      const cost = type === 'marine' ? 70 : 90;
-      if (state.gold < cost) {
-        return false;
-      }
-
-      const spawnPoint = getRandomCastleSpawn();
-      const defender = createDefender(type, state.selectedLane, spawnPoint);
-      setState({
-        gold: state.gold - cost,
-        defenders: [...state.defenders, defender],
-      });
-      return true;
-    },
+    summonUnit: () => false,
     summonHero: () => {
       if (state.gold < HERO_COST) {
         return false;
       }
-
-      const heroSpawn = getRandomCastleSpawn();
-      const heroDefender = createDefender('hero', state.selectedLane, heroSpawn);
-      setState({
-        gold: state.gold - HERO_COST,
-        defenders: [...state.defenders, heroDefender],
+      heroCounter += 1;
+      const center = laneToDisplay(tileToPercent(GOAL_TILE));
+      const heroUnits = state.heroUnits.concat({
+        id: `hero-${heroCounter}`,
+        laneId: state.selectedLane,
+        x: center.x + (Math.random() - 0.5) * 5,
+        y: center.y + (Math.random() - 0.5) * 5,
+        level: 1,
       });
+      setState({ gold: state.gold - HERO_COST, heroUnits });
       return true;
     },
     evolveHero: () => {
@@ -459,32 +504,13 @@ function initializeStore(): GameStore {
       if (state.gold < cost) {
         return false;
       }
-
-      const nextLevel = state.selectedHero.level + 1;
-      const rarity: Rarity =
-        nextLevel >= 8 ? 'mythic' : nextLevel >= 6 ? 'legendary' : nextLevel >= 4 ? 'epic' : 'rare';
-
-      const defenders = state.defenders.map((defender) => {
-        if (defender.kind !== 'hero') {
-          return defender;
-        }
-        return {
-          ...defender,
-          damage: Math.round(defender.damage * 1.2),
-          range: defender.range + 1,
-          level: defender.level + 1,
-        };
-      });
-
       setState({
         gold: state.gold - cost,
-        defenders,
         selectedHero: {
           ...state.selectedHero,
-          level: nextLevel,
+          level: state.selectedHero.level + 1,
           dps: Math.round(state.selectedHero.dps * 1.2),
           range: state.selectedHero.range + 1,
-          rarity,
         },
       });
       return true;
@@ -493,95 +519,177 @@ function initializeStore(): GameStore {
       if (state.skill.isCoolingDown) {
         return;
       }
-      const burstDamage = 45 + state.selectedHero.level * 6;
-      const damaged = state.enemies.map((enemy) => ({
-        ...enemy,
-        hp: enemy.hp - burstDamage,
-      }));
-
-      const survivors: Enemy[] = [];
+      const lanesNext = state.lanes.map((lane) => cloneLane(lane));
+      const lane = getSelectedLane(lanesNext, state.selectedLane);
       let bonusGold = 0;
-      damaged.forEach((enemy) => {
-        if (enemy.hp > 0) {
-          survivors.push(enemy);
+      const survivors: Monster[] = [];
+      let i = 0;
+      while (i < lane.monsters.length) {
+        const nextHp = lane.monsters[i].hp - (80 + state.selectedHero.level * 8);
+        if (nextHp > 0) {
+          survivors.push({ ...lane.monsters[i], hp: nextHp });
         } else {
-          bonusGold += enemy.rewardGold;
+          bonusGold += MONSTER_REWARD;
         }
-      });
-
+        i += 1;
+      }
+      lane.monsters = survivors;
       setState({
-        enemies: survivors,
+        lanes: lanesNext,
         gold: state.gold + bonusGold,
         skill: {
           ...state.skill,
           isCoolingDown: true,
-          cooldownRemainingMs: state.skill.cooldownTotalMs,
+          cooldownRemainingMs: SKILL_COOLDOWN_MS,
         },
       });
     },
     tick: (deltaMs) => {
-      let nextLife = state.life;
+      const lanesNext = state.lanes.map((lane) => cloneLane(lane));
       let nextGold = state.gold;
-      let nextEnemies = state.enemies.map((enemy) => moveEnemy(enemy, deltaMs));
+      let nextLife = state.life;
 
-      const filteredByLife: Enemy[] = [];
-      nextEnemies.forEach((enemy) => {
-        if (!enemy.alive) {
-          nextLife -= 1;
-        } else {
-          filteredByLife.push(enemy);
-        }
-      });
-      nextEnemies = filteredByLife;
+      let li = 0;
+      while (li < lanesNext.length) {
+        const lane = lanesNext[li];
 
-      const updatedDefenders = state.defenders.map((defender) => ({
-        ...defender,
-        cooldownRemainingMs: Math.max(0, defender.cooldownRemainingMs - deltaMs),
-      }));
+        let wi = 0;
+        while (wi < lane.workers.length) {
+          const worker = lane.workers[wi];
+          if (worker.state === 'moving' && worker.target) {
+            const targetWorld = laneToDisplay(tileToPercent(worker.target));
+            const dx = targetWorld.x - worker.x;
+            const dy = targetWorld.y - worker.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const step = (WORKER_SPEED_TILES_PER_SEC * deltaMs) / 1000;
+            if (dist <= step || dist <= 0.3) {
+              worker.x = targetWorld.x;
+              worker.y = targetWorld.y;
+              worker.state = 'building';
+              worker.buildStartTime = Date.now();
+            } else {
+              worker.x += (dx / dist) * step;
+              worker.y += (dy / dist) * step;
+            }
+          } else if (worker.state === 'building' && worker.buildStartTime && worker.plannedTowerTile) {
+            if (Date.now() - worker.buildStartTime >= BUILD_DURATION_MS) {
+              towerCounter += 1;
+              const tower: Tower = {
+                id: `tower-${towerCounter}`,
+                laneId: lane.id,
+                x: worker.plannedTowerTile.x,
+                y: worker.plannedTowerTile.y,
+                hp: 220,
+                completed: true,
+              };
 
-      const enemyDamageMap = new Map<string, number>();
+              lane.towers.push(tower);
+              lane.grid[tower.y][tower.x].walkable = false;
+              lane.grid[tower.y][tower.x].towerId = tower.id;
 
-      updatedDefenders.forEach((defender, index) => {
-        if (defender.cooldownRemainingMs > 0) {
-          return;
-        }
-
-        let target: Enemy | undefined;
-        let closestDistance = Number.POSITIVE_INFINITY;
-
-        nextEnemies.forEach((enemy) => {
-          const d = distance(defender.position, enemy.position);
-          if (d <= defender.range && d < closestDistance) {
-            target = enemy;
-            closestDistance = d;
+              const nextPath = computePath(lane.grid, SPAWN_TILE, GOAL_TILE);
+              if (nextPath.length === 0) {
+                lane.grid[tower.y][tower.x].walkable = true;
+                lane.grid[tower.y][tower.x].towerId = undefined;
+                lane.towers.pop();
+                worker.state = 'idle';
+                worker.target = undefined;
+                worker.buildStartTime = undefined;
+                worker.plannedTowerTile = undefined;
+              } else {
+                lane.cachedPath = nextPath;
+                worker.state = 'idle';
+                worker.target = undefined;
+                worker.buildStartTime = undefined;
+                worker.plannedTowerTile = undefined;
+                worker.towerId = tower.id;
+              }
+            }
           }
-        });
-
-        if (!target) {
-          return;
+          wi += 1;
         }
 
-        enemyDamageMap.set(target.id, (enemyDamageMap.get(target.id) ?? 0) + defender.damage);
-        updatedDefenders[index] = {
-          ...defender,
-          cooldownRemainingMs: defender.attackCooldownMs,
-        };
-      });
+        let mi = 0;
+        while (mi < lane.monsters.length) {
+          const monster = lane.monsters[mi];
+          if (lane.cachedPath.length === 0) {
+            monster.state = 'attacking';
+            if (lane.towers.length > 0) {
+              lane.towers[0].hp -= 20 * (deltaMs / 1000);
+              if (lane.towers[0].hp <= 0) {
+                const deadTower = lane.towers[0];
+                lane.grid[deadTower.y][deadTower.x].walkable = true;
+                lane.grid[deadTower.y][deadTower.x].towerId = undefined;
+                lane.towers.splice(0, 1);
+                lane.cachedPath = computePath(lane.grid, SPAWN_TILE, GOAL_TILE);
+              }
+            }
+            mi += 1;
+            continue;
+          }
 
-      const combatResolved: Enemy[] = [];
-      nextEnemies.forEach((enemy) => {
-        const damage = enemyDamageMap.get(enemy.id) ?? 0;
-        const hp = enemy.hp - damage;
-        if (hp <= 0) {
-          nextGold += enemy.rewardGold;
-        } else {
-          combatResolved.push({ ...enemy, hp });
+          monster.state = 'moving';
+          const path = lane.cachedPath;
+          const currentPathPoint = path[monster.pathIndex] || path[path.length - 1];
+          const targetWorld = laneToDisplay(tileToPercent(currentPathPoint));
+          const dx = targetWorld.x - monster.x;
+          const dy = targetWorld.y - monster.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const step = (monster.speed * deltaMs) / 1000;
+
+          if (dist <= step || dist <= 0.4) {
+            monster.x = targetWorld.x;
+            monster.y = targetWorld.y;
+            monster.pathIndex += 1;
+            if (monster.pathIndex >= path.length) {
+              monster.hp = 0;
+              nextLife -= 1;
+            }
+          } else {
+            monster.x += (dx / dist) * step;
+            monster.y += (dy / dist) * step;
+          }
+          mi += 1;
         }
-      });
-      nextEnemies = combatResolved;
+
+        const aliveMonsters: Monster[] = [];
+        let mci = 0;
+        while (mci < lane.monsters.length) {
+          if (lane.monsters[mci].hp > 0) {
+            aliveMonsters.push(lane.monsters[mci]);
+          } else {
+            nextGold += MONSTER_REWARD;
+          }
+          mci += 1;
+        }
+        lane.monsters = aliveMonsters;
+
+        let d = 0;
+        while (d < lane.towers.length) {
+          const tower = lane.towers[d];
+          if (tower.completed) {
+            const pos = laneToDisplay(tileToPercent({ x: tower.x, y: tower.y }));
+            const range = 12;
+            let t = 0;
+            while (t < lane.monsters.length) {
+              const m = lane.monsters[t];
+              const ddx = pos.x - m.x;
+              const ddy = pos.y - m.y;
+              const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+              if (dist <= range) {
+                m.hp -= tower.hp > 240 ? 24 * (deltaMs / 1000) : 15 * (deltaMs / 1000);
+                break;
+              }
+              t += 1;
+            }
+          }
+          d += 1;
+        }
+
+        li += 1;
+      }
 
       let nextWave = { ...state.wave, spawnTimerMs: state.wave.spawnTimerMs + deltaMs };
-
       if (nextWave.active && nextWave.enemiesSpawned < nextWave.enemiesToSpawn) {
         while (
           nextWave.spawnTimerMs >= nextWave.spawnIntervalMs &&
@@ -589,47 +697,82 @@ function initializeStore(): GameStore {
         ) {
           nextWave.spawnTimerMs -= nextWave.spawnIntervalMs;
           const laneId = nextWave.enemiesSpawned % LANE_COUNT;
+          const lane = getSelectedLane(lanesNext, laneId);
+          monsterCounter += 1;
+          const spawn = laneToDisplay(tileToPercent(SPAWN_TILE));
+          lane.monsters.push({
+            id: `monster-${monsterCounter}`,
+            laneId,
+            x: spawn.x,
+            y: spawn.y,
+            hp: 80 + nextWave.waveNumber * 22,
+            speed: 6 + nextWave.waveNumber * 0.4,
+            pathIndex: 1,
+            state: 'moving',
+          });
           nextWave.enemiesSpawned += 1;
-          nextEnemies.push(createEnemy(nextWave.waveNumber, laneId));
         }
       }
 
-      if (nextWave.active && nextWave.enemiesSpawned >= nextWave.enemiesToSpawn && nextEnemies.length === 0) {
-        nextWave = {
-          ...nextWave,
-          active: false,
-        };
+      if (nextWave.active) {
+        let remainingMonsters = 0;
+        let l = 0;
+        while (l < lanesNext.length) {
+          remainingMonsters += lanesNext[l].monsters.length;
+          l += 1;
+        }
+        if (nextWave.enemiesSpawned >= nextWave.enemiesToSpawn && remainingMonsters === 0) {
+          nextWave.active = false;
+        }
       }
 
       let nextSkill = state.skill;
       if (state.skill.isCoolingDown) {
-        const remaining = Math.max(0, state.skill.cooldownRemainingMs - deltaMs);
+        const remain = state.skill.cooldownRemainingMs - deltaMs;
         nextSkill = {
           ...state.skill,
-          cooldownRemainingMs: remaining,
-          isCoolingDown: remaining > 0,
+          cooldownRemainingMs: remain > 0 ? remain : 0,
+          isCoolingDown: remain > 0,
         };
       }
 
       if (nextLife <= 0) {
-        nextLife = 20;
-        nextGold = START_GOLD;
-        nextEnemies = [];
-        nextWave = {
-          active: false,
-          waveNumber: 0,
-          enemiesToSpawn: 0,
-          enemiesSpawned: 0,
-          spawnIntervalMs: 900,
-          spawnTimerMs: 0,
-        };
+        const resetLanes: LaneState[] = [];
+        let laneId = 0;
+        while (laneId < LANE_COUNT) {
+          resetLanes.push(createLane(laneId));
+          laneId += 1;
+        }
+
+        setState({
+          life: 20,
+          gold: START_GOLD,
+          lanes: resetLanes,
+          selectedLane: 0,
+          selectedWorkerId: null,
+          isTowerPlacementMode: false,
+          heroUnits: [],
+          wave: {
+            active: false,
+            waveNumber: 0,
+            enemiesToSpawn: 0,
+            enemiesSpawned: 0,
+            spawnIntervalMs: 900,
+            spawnTimerMs: 0,
+          },
+          skill: {
+            ...state.skill,
+            isCoolingDown: false,
+            cooldownRemainingMs: 0,
+          },
+        });
+        return;
       }
 
       setState({
         life: nextLife,
         gold: nextGold,
-        enemies: nextEnemies,
-        defenders: updatedDefenders,
+        lanes: lanesNext,
         wave: nextWave,
         skill: nextSkill,
       });
