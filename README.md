@@ -1,130 +1,281 @@
 6-Lane Castle Defense
+Codex Implementation Specification
+1. 엔진 아키텍처 규칙
+1.1 분리 원칙
 
-RT S Line Defense Engine built with Expo
+모든 게임 로직은 store/gameStore.ts에 위치
 
-1. 프로젝트 비전
+React 컴포넌트는 상태를 읽기만 한다
 
-이 프로젝트는
-스타크래프트 유즈맵 감성의 RTS 라인 디펜스 게임을
-Expo 환경에서 성능 안전하게 구현하는 것을 목표로 합니다.
+엔진 로직은 React에 의존하지 않는다
 
-단순 타워디펜스가 아니라,
+게임 루프는 store 내부에서 관리
 
-플레이어가 위치를 지정하면
-일꾼이 이동해 건설하고
-길을 막으면 몬스터가 공격하는
-RTS 기반 전략 디펜스 엔진
-
-을 구현합니다.
-
-2. 핵심 설계 철학
-1️⃣ 즉시 설치형 디펜스가 아니다
-
-플레이어는 타일을 선택한다.
-
-Worker가 이동한다.
-
-도착 후 건설이 시작된다.
-
-완성 순간에만 길이 차단된다.
-
-2️⃣ 몬스터는 길만 이동한다
-
-타워는 통과 불가
-
-경로가 존재하면 이동
-
-경로가 없으면 공격 상태 전환
-
-3️⃣ 길 완전 차단은 허용하지 않는다
-
-설치 전 경로 사전 검증
-
-완성 후 재검증
-
-실패 시 자동 롤백
-
-4️⃣ 엔진은 React와 분리된다
-
-Grid 기반 순수 로직
-
-이벤트 기반 Pathfinding
-
-cachedPath 사용
-
-UI는 단순 렌더 역할
-
-3. 게임 구조
-3.1 6-Lane 구조
+2. 맵 및 라인 구조
+2.1 라인 개수
 
 총 6개 라인
 
-모든 라인은 중앙 캐슬로 수렴
+각 라인은 독립적인 Grid 보유
 
-플레이어는 한 라인을 선택해 전장 확인
+각 라인은 spawn과 goal 좌표 보유
 
-미니맵으로 전체 전략 확인
+2.2 Grid 정의
 
-3.2 Grid 시스템
+크기: 32 x 32
 
-각 라인 32x32 타일
+2차원 배열
 
-타일은 walkable 여부 보유
+type Tile = {
+  x: number
+  y: number
+  walkable: boolean
+  towerId?: string
+}
 
-완성 타워만 walkable = false
+type Grid = Tile[][]
 
-3.3 Worker 시스템
+2.3 walkable 규칙
 
-상태 머신:
+기본값: true
 
-idle → moving → building → idle
+타워 완성 시: false
+
+타워 파괴 시: true
+
+건설 중 타워는 walkable 변경 금지
+
+3. Worker 시스템
+3.1 Worker 상태
+type WorkerState =
+  | "idle"
+  | "moving"
+  | "building"
+
+3.2 Worker 구조
+type Worker = {
+  id: string
+  lineId: number
+  x: number
+  y: number
+  state: WorkerState
+  target?: { x: number; y: number }
+  buildStartTime?: number
+}
+
+3.3 Worker 행동 규칙
+Build 요청 시:
+
+target 설정
+
+state → "moving"
+
+Worker는 타일 단위 이동
+
+도착 시:
+
+state → "building"
+
+buildStartTime 기록
+
+건설 시간:
+
+고정 2000ms
+
+완료 시:
+
+타워 생성
+
+해당 타일 walkable = false
+
+A* 경로 재검증
+
+경로 없으면:
+
+타워 제거
+
+walkable 복원
+
+4. 타워 시스템
+type Tower = {
+  id: string
+  lineId: number
+  x: number
+  y: number
+  hp: number
+  completed: boolean
+  workerId: string
+}
+
+4.1 타워 제약
+
+Worker 1명당 타워 1개
+
+업그레이드는 completed 상태에서만 가능
+
+5. Pathfinding 시스템
+5.1 알고리즘
+
+A* 사용
+
+휴리스틱: Manhattan distance
+
+5.2 재탐색 조건
+
+재탐색은 다음 이벤트에서만 발생:
+
+타워 완성
+
+타워 파괴
+
+웨이브 시작
+
+5.3 캐싱
+
+각 라인마다 cachedPath 보유
+
+모든 몬스터는 동일 path 사용
+
+몬스터 개별 A* 금지
+
+6. 몬스터 시스템
+6.1 상태
+type MonsterState =
+  | "moving"
+  | "attacking"
+
+6.2 구조
+type Monster = {
+  id: string
+  lineId: number
+  x: number
+  y: number
+  hp: number
+  damage: number
+  state: MonsterState
+  pathIndex: number
+}
+
+6.3 이동 규칙
+
+state === "moving"
+
+cachedPath[pathIndex]로 이동
+
+pathIndex 증가
+
+6.4 경로 없음 처리
+
+A* 결과가 null이면:
+
+state = "attacking"
+
+6.5 공격 규칙
+
+blocking tower 선택
+
+tower.hp -= monster.damage
+
+tower.hp <= 0이면 제거
+
+제거 후 walkable 복원
+
+경로 재탐색
+
+7. 웨이브 시스템
+
+웨이브 시작 시 각 라인 순환 스폰
+
+몬스터는 spawn 위치에서 시작
+
+goal 도달 시:
+
+Life 감소
+
+몬스터 제거
+
+8. Hero 시스템
+
+Hero는 캐슬 주변 스폰
+
+Hero는 몬스터 공격 가능
+
+Hero 진화는 store 내 수치 변경
+
+9. Skill 시스템
+type Skill = {
+  cooldown: number
+  lastUsed: number
+}
 
 
-건설 중에는 길 차단하지 않음.
-완성 시점에만 길 반영.
+사용 시 광역 데미지
 
-3.4 몬스터 AI
+처치 시 Gold 지급
 
-상태:
+10. 게임 루프
+10.1 방식
 
-moving
-attacking
+requestAnimationFrame 사용
 
+setInterval 사용 금지
 
-cachedPath 따라 이동
+10.2 루프 순서
+updateWorkers()
+updateMonsters()
+updateTowers()
+checkWaveEnd()
 
-길 없으면 blocking tower 공격
+11. 금지 사항
 
-타워 파괴 시 경로 재탐색
+매 프레임 A* 실행 금지
 
-4. 이 프로젝트가 지향하는 것
+React state로 타일 변경 금지
 
-이 프로젝트는:
+픽셀 기반 이동 금지
 
-단순 모바일 디펜스가 아니다.
+몬스터 개별 경로 탐색 금지
 
-RTS 감성 전략 게임을 목표로 한다.
+walkable 즉시 변경 금지 (건설 중)
 
-Expo 환경에서도 충분히 확장 가능한 엔진을 만든다.
+12. 성능 기준
+항목	제한
+Grid	32x32
+몬스터	≤ 120 per line
+Worker	≤ 3 per line
+동시 Pathfinding	이벤트 기반
+13. 반드시 지켜야 할 설계 원칙
 
-멀티플레이 확장을 염두에 둔다.
+타일 기반 Grid
 
-장기적으로 PvP / 협동 모드까지 확장한다.
+Worker 상태 머신 유지
 
-5. 현재 구현 단계
+완성 시점 차단
 
-(여기에 현재 구현 내용을 간략히 정리)
+Path 캐싱
 
-6. 다음 단계
+엔진/UI 완전 분리
 
-타워 타입 확장
+상태 변경은 store 내부에서만 수행
 
-몬스터 AI 고도화
+14. 구현 목표
 
-워커 다중 처리
+Codex는 위 명세를 기준으로:
 
-엔진 테스트 코드
+타입 정의
 
-Pathfinding 최적화
+Grid 엔진
 
-멀티 대응 구조 설계
+A* 구현
+
+Worker 상태 머신
+
+Monster 상태 머신
+
+게임 루프
+
+이벤트 기반 재탐색 구조
+
+를 완전 구현해야 한다.
+
+설명 없이 코드 중심으로 출력할 것.
