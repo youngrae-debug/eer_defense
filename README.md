@@ -1,162 +1,130 @@
-# 6-Lane Castle Defense (Expo + React Native)
+6-Lane Castle Defense
 
-스타크래프트 유즈맵 감성의 **라인 디펜스 + RTS 워커 건설 시스템**을 목표로 만든 Expo 프로젝트입니다.
+RT S Line Defense Engine built with Expo
 
-현재 구현은 아래 핵심 컨셉을 포함합니다.
+1. 프로젝트 비전
 
-- 6개 라인 중 하나를 선택해 전장 확인
-- 모든 라인은 중앙 캐슬로 수렴
-- 몬스터가 캐슬 도달 시 Life 감소
-- Worker 구매 → 이동 → 건설 → 타워 완성
-- 타워 완성 시점에만 길 차단 반영
-- 경로 막힘 시 건설 자동 취소(롤백)
-- 하단 탭(BATTLE / SHOP / WORKERS) 기반 UI
+이 프로젝트는
+스타크래프트 유즈맵 감성의 RTS 라인 디펜스 게임을
+Expo 환경에서 성능 안전하게 구현하는 것을 목표로 합니다.
 
----
+단순 타워디펜스가 아니라,
 
-## 1. 프로젝트 개요
+플레이어가 위치를 지정하면
+일꾼이 이동해 건설하고
+길을 막으면 몬스터가 공격하는
+RTS 기반 전략 디펜스 엔진
 
-- Framework: Expo + React Native + TypeScript
-- State: 커스텀 external store (`useSyncExternalStore`)
-- UI: 다크 테마 HUD, 전장, 미니맵, 하단 탭 패널
-- 핵심 설계: 엔진 로직(스토어)과 화면(UI) 분리
+을 구현합니다.
 
----
+2. 핵심 설계 철학
+1️⃣ 즉시 설치형 디펜스가 아니다
 
-## 2. 현재 구현된 게임 시스템
+플레이어는 타일을 선택한다.
 
-### 2.1 라인/맵 구조
+Worker가 이동한다.
 
-- 라인은 총 6개
-- 메인 화면에는 **선택된 라인 1개만 표시**
-- 어떤 라인을 선택해도 표시상 캐슬이 화면 하단에 오도록 좌표 변환
-- 좌하단 미니맵에서 전체 라인 구조를 축소 표시
+도착 후 건설이 시작된다.
 
-### 2.2 Grid 기반 RTS 건설
+완성 순간에만 길이 차단된다.
 
-- 라인마다 32x32 타일 Grid
-- 타일 데이터
-  - `x`, `y`
-  - `walkable`
-  - `towerId`
-- Worker 상태 머신
-  - `idle`
-  - `moving`
-  - `building`
+2️⃣ 몬스터는 길만 이동한다
 
-### 2.3 Worker Build 파이프라인
+타워는 통과 불가
 
-1. Worker 선택
-2. Build Mode 진입
-3. 타일 클릭으로 건설 요청
-4. 요청 시 가상 차단 경로 검증 (사전 path check)
-5. Worker가 타일로 이동
-6. 도착 후 2초 건설
-7. 완료 시 타일 차단(`walkable=false`)
-8. 완료 후 경로 재검증 실패 시 타워 제거 + 타일 복원
+경로가 존재하면 이동
 
-> 즉, **건설 중에는 길을 막지 않고**, 완성 시점에만 길 차단을 확정합니다.
+경로가 없으면 공격 상태 전환
 
-### 2.4 타워/업그레이드 제약
+3️⃣ 길 완전 차단은 허용하지 않는다
 
-- Worker 1명당 타워 1개
-- Shop에서 Worker 구매
-- 선택 Worker의 타워 업그레이드 가능
+설치 전 경로 사전 검증
 
-### 2.5 몬스터/웨이브
+완성 후 재검증
 
-- 웨이브 시작 시 라인 순환 스폰
-- 몬스터는 cachedPath 기반 이동
-- 경로 없으면 `attacking` 상태로 타워 공격
-- 타워 파괴 시 타일 복원 + 경로 재탐색
-- 캐슬 도달 시 Life 감소
+실패 시 자동 롤백
 
-### 2.6 Hero/Skill
+4️⃣ 엔진은 React와 분리된다
 
-- Hero는 캐슬 주변에서 스폰
-- Hero 진화 가능
-- Skill은 쿨다운 기반 광역 데미지 + 처치 골드 지급
+Grid 기반 순수 로직
 
----
+이벤트 기반 Pathfinding
 
-## 3. UI/UX 구성
+cachedPath 사용
 
-### 상단
+UI는 단순 렌더 역할
 
-- HUD: Wave / Gold / Life
+3. 게임 구조
+3.1 6-Lane 구조
 
-### 중앙
+총 6개 라인
 
-- 선택 라인 전장
-- 타워, 워커, 몬스터, 경로 점, 캐슬 표시
+모든 라인은 중앙 캐슬로 수렴
 
-### 좌하단
+플레이어는 한 라인을 선택해 전장 확인
 
-- 미니맵(전체 라인 축소)
+미니맵으로 전체 전략 확인
 
-### 하단
+3.2 Grid 시스템
 
-- Bottom Tabs: `BATTLE`, `SHOP`, `WORKERS`
-- 탭에 따라 하단 패널 전환
-  - BATTLE: 웨이브/스킬/히어로 카드
-  - SHOP: Worker 구매, Build, 업그레이드, Hero 관련 액션
-  - WORKERS: Worker 선택 및 Build Mode 제어
+각 라인 32x32 타일
 
----
+타일은 walkable 여부 보유
 
-## 4. 주요 파일 구조
+완성 타워만 walkable = false
 
-```txt
-src/
-  components/
-    Battlefield.tsx   # 선택 라인 전장 렌더
-    HUD.tsx           # 상단 HUD
-    HeroCard.tsx      # 히어로 카드
-    MiniMap.tsx       # 좌하단 미니맵
-    PrimaryButton.tsx # 공통 버튼
-    ShopPanel.tsx     # SHOP 탭 패널
-    SkillButton.tsx   # 스킬 버튼
-  screens/
-    GameScreen.tsx    # 전체 화면 조합 및 탭 전환
-  store/
-    gameStore.ts      # 게임 엔진/상태/루프
-  theme/
-    theme.ts          # 디자인 토큰
-App.tsx               # 앱 엔트리
-```
+3.3 Worker 시스템
 
----
+상태 머신:
 
-## 5. 실행 방법
+idle → moving → building → idle
 
-```bash
-npm install
-npx expo start
-```
 
-- Web: `npx expo start --web`
-- iOS: `npx expo run:ios`
-- Android: `npx expo run:android`
+건설 중에는 길 차단하지 않음.
+완성 시점에만 길 반영.
 
----
+3.4 몬스터 AI
 
-## 6. 현재 우선순위 TODO
+상태:
 
-- Worker 이동 경로 시각화(프리뷰 라인)
-- 건설 중 프로그레스 UI 고도화
-- 타워 타입 확장(범위/공속/특수효과)
-- 몬스터 타입 확장(보스/저항)
-- 라인별 유저 정보/점수 표현
-- 엔진 테스트 코드(순수 함수 레벨)
+moving
+attacking
 
----
 
-## 7. 설계 원칙 요약
+cachedPath 따라 이동
 
-- 타일 기반 Grid
-- Worker 상태 머신
-- 완성 시점 차단
-- 이벤트 기반 경로 재탐색
-- 엔진/UI 분리
+길 없으면 blocking tower 공격
 
-위 원칙을 유지하며 기능을 확장하면, Expo/Web 환경에서도 안정적으로 RTS형 디펜스 시스템을 발전시킬 수 있습니다.
+타워 파괴 시 경로 재탐색
+
+4. 이 프로젝트가 지향하는 것
+
+이 프로젝트는:
+
+단순 모바일 디펜스가 아니다.
+
+RTS 감성 전략 게임을 목표로 한다.
+
+Expo 환경에서도 충분히 확장 가능한 엔진을 만든다.
+
+멀티플레이 확장을 염두에 둔다.
+
+장기적으로 PvP / 협동 모드까지 확장한다.
+
+5. 현재 구현 단계
+
+(여기에 현재 구현 내용을 간략히 정리)
+
+6. 다음 단계
+
+타워 타입 확장
+
+몬스터 AI 고도화
+
+워커 다중 처리
+
+엔진 테스트 코드
+
+Pathfinding 최적화
+
+멀티 대응 구조 설계
