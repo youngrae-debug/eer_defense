@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { useSyncExternalStore } from 'react';
 
 interface Hero {
   id: string;
@@ -20,6 +20,9 @@ interface GameState {
   selectedHero: Hero;
   isShopOpen: boolean;
   skill: SkillState;
+}
+
+interface GameActions {
   incrementWave: () => void;
   addGold: (amount: number) => void;
   spendGold: (amount: number) => boolean;
@@ -29,9 +32,11 @@ interface GameState {
   tickSkillCooldown: (deltaMs: number) => void;
 }
 
+type GameStore = GameState & GameActions;
+
 const initialSkillCooldownMs = 7000;
 
-export const useGameStore = create<GameState>((set, get) => ({
+let state: GameStore = {
   wave: 12,
   gold: 320,
   selectedHero: {
@@ -47,45 +52,68 @@ export const useGameStore = create<GameState>((set, get) => ({
     cooldownRemainingMs: 0,
     cooldownTotalMs: initialSkillCooldownMs,
   },
-  incrementWave: () => set((state) => ({ wave: state.wave + 1 })),
-  addGold: (amount) => set((state) => ({ gold: state.gold + amount })),
+  incrementWave: () => {
+    setState({ wave: state.wave + 1 });
+  },
+  addGold: (amount) => {
+    setState({ gold: state.gold + amount });
+  },
   spendGold: (amount) => {
-    const currentGold = get().gold;
-    if (currentGold < amount) {
+    if (state.gold < amount) {
       return false;
     }
-    set({ gold: currentGold - amount });
+    setState({ gold: state.gold - amount });
     return true;
   },
-  toggleShop: () => set((state) => ({ isShopOpen: !state.isShopOpen })),
-  closeShop: () => set({ isShopOpen: false }),
+  toggleShop: () => {
+    setState({ isShopOpen: !state.isShopOpen });
+  },
+  closeShop: () => {
+    setState({ isShopOpen: false });
+  },
   triggerSkill: () => {
-    const skill = get().skill;
-    if (skill.isCoolingDown) {
+    if (state.skill.isCoolingDown) {
       return;
     }
-    set({
+    setState({
       skill: {
-        ...skill,
+        ...state.skill,
         isCoolingDown: true,
-        cooldownRemainingMs: skill.cooldownTotalMs,
+        cooldownRemainingMs: state.skill.cooldownTotalMs,
       },
     });
   },
   tickSkillCooldown: (deltaMs) => {
-    const skill = get().skill;
-    if (!skill.isCoolingDown) {
+    if (!state.skill.isCoolingDown) {
       return;
     }
-    const nextRemaining = Math.max(0, skill.cooldownRemainingMs - deltaMs);
-    set({
+    const nextRemaining = Math.max(0, state.skill.cooldownRemainingMs - deltaMs);
+    setState({
       skill: {
-        ...skill,
+        ...state.skill,
         cooldownRemainingMs: nextRemaining,
         isCoolingDown: nextRemaining > 0,
       },
     });
   },
-}));
+};
+
+const listeners = new Set<() => void>();
+
+function setState(partial: Partial<GameStore>) {
+  state = { ...state, ...partial };
+  listeners.forEach((listener) => listener());
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function useGameStore(): GameStore {
+  return useSyncExternalStore(subscribe, () => state, () => state);
+}
 
 export type { Hero };

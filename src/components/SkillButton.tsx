@@ -1,6 +1,11 @@
+import { useEffect } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import Svg, { Circle } from 'react-native-svg';
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+  interpolateColor,
+} from 'react-native-reanimated';
 
 import { theme } from '@/src/theme/theme';
 
@@ -13,10 +18,8 @@ interface SkillButtonProps {
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+const AnimatedView = Animated.createAnimatedComponent(View);
 const size = 64;
-const strokeWidth = 6;
-const radius = (size - strokeWidth) / 2;
-const circumference = 2 * Math.PI * radius;
 
 export function SkillButton({
   label,
@@ -26,39 +29,26 @@ export function SkillButton({
   onPress,
 }: SkillButtonProps) {
   const scale = useSharedValue(1);
+  const progress = useSharedValue(0);
 
   const ratio = cooldownTotalMs > 0 ? cooldownRemainingMs / cooldownTotalMs : 0;
-  const ringOffset = circumference * ratio;
+
+  useEffect(() => {
+    progress.value = withTiming(ratio, { duration: 120 });
+  }, [progress, ratio]);
 
   const pressAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
   }));
 
+  const ringStyle = useAnimatedStyle(() => ({
+    borderColor: interpolateColor(progress.value, [0, 1], [theme.colors.primary, theme.colors.textSecondary]),
+    opacity: 0.5 + progress.value * 0.5,
+  }));
+
   return (
     <View style={styles.root}>
-      <Svg width={size} height={size} style={styles.ring}>
-        <Circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          stroke={theme.colors.textSecondary}
-          strokeOpacity={0.3}
-          strokeWidth={strokeWidth}
-          fill="none"
-        />
-        <Circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          stroke={theme.colors.primary}
-          strokeLinecap="round"
-          strokeWidth={strokeWidth}
-          fill="none"
-          strokeDasharray={`${circumference}`}
-          strokeDashoffset={ringOffset}
-          transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        />
-      </Svg>
+      <AnimatedView style={[styles.ring, ringStyle]} />
       <AnimatedPressable
         onPress={onPress}
         disabled={isCoolingDown}
@@ -85,6 +75,10 @@ const styles = StyleSheet.create({
   },
   ring: {
     position: 'absolute',
+    width: size,
+    height: size,
+    borderRadius: theme.radius.pill,
+    borderWidth: 6,
   },
   button: {
     width: 52,
