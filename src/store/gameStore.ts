@@ -140,9 +140,11 @@ const START_GOLD = 900;
 const START_LIFE = 20;
 const WORKER_COST = 80;
 const HERO_COST = 200;
+const WORKER_BUILD_RANGE = 0;
 const BUILD_DURATION_MS = 2000;
 const MONSTER_REWARD = 10;
 const SKILL_COOLDOWN_MS = 7000;
+const MAX_MONSTERS_PER_LINE = 120;
 const SPAWN: Point = { x: 16, y: 1 };
 const GOAL: Point = { x: 16, y: 30 };
 
@@ -222,6 +224,7 @@ function aStar(grid: Tile[][], start: Point, goal: Point): Point[] | null {
       }
     }
   }
+
   return null;
 }
 
@@ -256,12 +259,12 @@ function getLine(lines: LineState[], lineId: number): LineState {
   return lines.find((line) => line.id === lineId) ?? lines[0];
 }
 
-function getEntityAtTile(line: LineState, tile: Point): SelectedEntity {
+function getEntityAtTile(line: LineState, tile: Point, heroUnits: HeroUnit[]): SelectedEntity {
   const worker = line.workers.find((w) => w.x === tile.x && w.y === tile.y);
   if (worker) {
     return { type: 'worker', id: worker.id };
   }
-  const hero = state.heroUnits.find((h) => h.lineId === line.id && h.x === tile.x && h.y === tile.y);
+  const hero = heroUnits.find((h) => h.lineId === line.id && h.x === tile.x && h.y === tile.y);
   if (hero) {
     return { type: 'hero', id: hero.id };
   }
@@ -272,40 +275,76 @@ function getEntityAtTile(line: LineState, tile: Point): SelectedEntity {
   return null;
 }
 
-function applyCommand(lines: LineState[], selectedLine: number, command: PendingCommand, tile: Point): { selectedEntity: SelectedEntity; pendingCommand: null } {
+function setWorkerMove(worker: Worker, tile: Point) {
+  worker.target = { ...tile };
+  worker.state = 'moving';
+  worker.moveProgress = 0;
+}
+
+function getBlockingTower(line: LineState): Tower | undefined {
+  return [...line.towers]
+    .filter((tower) => tower.completed)
+    .sort((a, b) => manhattan(a, line.spawn) - manhattan(b, line.spawn))[0];
+}
+
+function tryUpdateLinePath(line: LineState): boolean {
+  const nextPath = aStar(line.grid, line.spawn, line.goal);
+  if (!nextPath) {
+    return false;
+  }
+  line.cachedPath = nextPath;
+  for (const monster of line.monsters) {
+    monster.pathIndex = 0;
+    monster.travelProgress = 0;
+    monster.x = line.spawn.x;
+    monster.y = line.spawn.y;
+    monster.state = 'moving';
+  }
+  return true;
+}
+
+function applyCommand(snapshot: GameStore, lines: LineState[], selectedLine: number, command: PendingCommand, tile: Point): SelectedEntity {
   const line = getLine(lines, selectedLine);
+
   if (command.type === 'MOVE') {
     const worker = line.workers.find((w) => w.id === command.entityId);
-    const hero = state.heroUnits.find((h) => h.id === command.entityId && h.lineId === selectedLine);
-    if (worker) {
-      worker.target = tile;
-      worker.state = 'moving';
-      worker.moveProgress = 0;
-      return { selectedEntity: { type: 'worker', id: worker.id }, pendingCommand: null };
+    const hero = snapshot.heroUnits.find((h) => h.id === command.entityId && h.lineId === selectedLine);
+    if (worker && inBounds(tile.x, tile.y)) {
+      setWorkerMove(worker, tile);
+      return { type: 'worker', id: worker.id };
     }
-    if (hero) {
+    if (hero && inBounds(tile.x, tile.y)) {
       hero.x = tile.x;
       hero.y = tile.y;
-      return { selectedEntity: { type: 'hero', id: hero.id }, pendingCommand: null };
+      return { type: 'hero', id: hero.id };
     }
+    return snapshot.selectedEntity;
   }
 
   if (command.type === 'BUILD_SUNKEN') {
     const worker = line.workers.find((w) => w.id === command.entityId);
     const tileRef = line.grid[tile.y][tile.x];
-    if (worker && !worker.assignedTowerId && tileRef.walkable && !tileRef.towerId) {
-      worker.target = { ...tile };
-      worker.state = 'executing';
-      worker.moveProgress = 0;
+    if (!worker || worker.assignedTowerId || !tileRef.walkable || tileRef.towerId) {
+      return snapshot.selectedEntity;
     }
-    return { selectedEntity: worker ? { type: 'worker', id: worker.id } : null, pendingCommand: null };
+
+    worker.target = { ...tile };
+    worker.state = 'executing';
+    worker.moveProgress = 0;
+    return { type: 'worker', id: worker.id };
   }
 
   if (command.type === 'ATTACK') {
-    return { selectedEntity: state.selectedEntity, pendingCommand: null };
+    const worker = line.workers.find((w) => w.id === command.entityId);
+    if (worker) {
+      worker.target = { ...tile };
+      worker.state = 'moving';
+      worker.moveProgress = 0;
+    }
+    return snapshot.selectedEntity;
   }
 
-  return { selectedEntity: state.selectedEntity, pendingCommand: null };
+  return snapshot.selectedEntity;
 }
 
 function initializeState(): GameStore {
@@ -353,6 +392,7 @@ function initializeState(): GameStore {
       if (!state.selectedEntity) {
         return;
       }
+
       if (type === 'STOP') {
         const linesNext = state.lines.map(cloneLine);
         const line = getLine(linesNext, state.selectedLine);
@@ -361,11 +401,13 @@ function initializeState(): GameStore {
           if (worker) {
             worker.state = 'idle';
             worker.target = undefined;
+            worker.buildStartTime = undefined;
           }
         }
         setState({ lines: linesNext, pendingCommand: null, previewTile: null });
         return;
       }
+
       setState({
         pendingCommand: {
           type,
@@ -387,23 +429,25 @@ function initializeState(): GameStore {
       if (!inBounds(tileX, tileY)) {
         return;
       }
+
       const tile = { x: tileX, y: tileY };
       const linesNext = state.lines.map(cloneLine);
 
       if (state.pendingCommand) {
-        const commandResult = applyCommand(linesNext, state.selectedLine, state.pendingCommand, tile);
-        setState({ lines: linesNext, selectedEntity: commandResult.selectedEntity, pendingCommand: null, previewTile: null });
+        const nextSelected = applyCommand(state, linesNext, state.selectedLine, state.pendingCommand, tile);
+        setState({ lines: linesNext, selectedEntity: nextSelected, pendingCommand: null, previewTile: null });
         return;
       }
 
       const line = getLine(linesNext, state.selectedLine);
-      const entity = getEntityAtTile(line, tile);
+      const entity = getEntityAtTile(line, tile, state.heroUnits);
       setState({ selectedEntity: entity, pendingCommand: null, previewTile: null });
     },
     startNextWave: () => {
       if (state.wave.active) {
         return;
       }
+
       const nextLines = state.lines.map(cloneLine);
       nextLines.forEach((line) => {
         line.cachedPath = aStar(line.grid, line.spawn, line.goal) ?? [];
@@ -426,11 +470,13 @@ function initializeState(): GameStore {
       if (state.gold < WORKER_COST) {
         return false;
       }
+
       const nextLines = state.lines.map(cloneLine);
       const line = getLine(nextLines, state.selectedLine);
       if (line.workers.length >= 3) {
         return false;
       }
+
       workerCounter += 1;
       const worker: Worker = {
         id: `worker-${workerCounter}`,
@@ -448,9 +494,11 @@ function initializeState(): GameStore {
       if (state.gold < HERO_COST) {
         return false;
       }
+
       heroCounter += 1;
-      const heroUnits = state.heroUnits.concat({ id: `hero-${heroCounter}`, lineId: state.selectedLine, x: GOAL.x, y: GOAL.y, level: 1 });
-      setState({ gold: state.gold - HERO_COST, heroUnits, selectedEntity: { type: 'hero', id: `hero-${heroCounter}` } });
+      const heroId = `hero-${heroCounter}`;
+      const heroUnits = state.heroUnits.concat({ id: heroId, lineId: state.selectedLine, x: GOAL.x, y: GOAL.y, level: 1 });
+      setState({ gold: state.gold - HERO_COST, heroUnits, selectedEntity: { type: 'hero', id: heroId } });
       return true;
     },
     evolveHero: () => {
@@ -458,6 +506,7 @@ function initializeState(): GameStore {
       if (state.gold < cost) {
         return false;
       }
+
       setState({
         gold: state.gold - cost,
         selectedHero: {
@@ -473,9 +522,11 @@ function initializeState(): GameStore {
       if (now - state.skill.lastUsed < state.skill.cooldown) {
         return;
       }
+
       const linesNext = state.lines.map(cloneLine);
       const line = getLine(linesNext, state.selectedLine);
       let killed = 0;
+
       line.monsters = line.monsters.filter((monster) => {
         const hp = monster.hp - (80 + state.selectedHero.level * 8);
         if (hp <= 0) {
@@ -485,6 +536,7 @@ function initializeState(): GameStore {
         monster.hp = hp;
         return true;
       });
+
       setState({ lines: linesNext, gold: state.gold + killed * MONSTER_REWARD, skill: { ...state.skill, lastUsed: now } });
     },
   };
@@ -499,12 +551,10 @@ function setState(patch: Partial<GameStore>) {
 }
 
 function updateWorkers(lines: LineState[], deltaMs: number, now: number) {
-  for (let li = 0; li < lines.length; li += 1) {
-    const line = lines[li];
-    for (let wi = 0; wi < line.workers.length; wi += 1) {
-      const worker = line.workers[wi];
-      if (!worker.target || (worker.state !== 'moving' && worker.state !== 'executing')) {
-        if (worker.state === 'building' && worker.buildStartTime && now - worker.buildStartTime >= BUILD_DURATION_MS && worker.target) {
+  for (const line of lines) {
+    for (const worker of line.workers) {
+      if (worker.state === 'building') {
+        if (worker.buildStartTime && now - worker.buildStartTime >= BUILD_DURATION_MS && worker.target) {
           towerCounter += 1;
           const tower: Tower = {
             id: `tower-${towerCounter}`,
@@ -515,23 +565,29 @@ function updateWorkers(lines: LineState[], deltaMs: number, now: number) {
             completed: true,
             workerId: worker.id,
           };
+
           line.towers.push(tower);
           line.grid[tower.y][tower.x].walkable = false;
           line.grid[tower.y][tower.x].towerId = tower.id;
-          const nextPath = aStar(line.grid, line.spawn, line.goal);
-          if (!nextPath) {
+
+          const pathKept = tryUpdateLinePath(line);
+          if (!pathKept) {
             line.towers = line.towers.filter((t) => t.id !== tower.id);
             line.grid[tower.y][tower.x].walkable = true;
             line.grid[tower.y][tower.x].towerId = undefined;
           } else {
-            line.cachedPath = nextPath;
             worker.assignedTowerId = tower.id;
           }
+
           worker.state = 'idle';
           worker.target = undefined;
           worker.buildStartTime = undefined;
           worker.moveProgress = 0;
         }
+        continue;
+      }
+
+      if (!worker.target || (worker.state !== 'moving' && worker.state !== 'executing')) {
         continue;
       }
 
@@ -543,9 +599,9 @@ function updateWorkers(lines: LineState[], deltaMs: number, now: number) {
 
       const dx = worker.target.x - worker.x;
       const dy = worker.target.y - worker.y;
-      if (Math.abs(dx) > 0) {
+      if (Math.abs(dx) > WORKER_BUILD_RANGE) {
         worker.x += Math.sign(dx);
-      } else if (Math.abs(dy) > 0) {
+      } else if (Math.abs(dy) > WORKER_BUILD_RANGE) {
         worker.y += Math.sign(dy);
       }
 
@@ -562,22 +618,20 @@ function updateWorkers(lines: LineState[], deltaMs: number, now: number) {
   }
 }
 
-function updateMonsters(lines: LineState[], deltaMs: number): { lifeLoss: number; goldGain: number } {
+function updateMonsters(lines: LineState[], deltaMs: number, heroUnits: HeroUnit[], selectedHero: Hero): { lifeLoss: number; goldGain: number } {
   let lifeLoss = 0;
   let goldGain = 0;
 
-  for (let li = 0; li < lines.length; li += 1) {
-    const line = lines[li];
+  for (const line of lines) {
     const alive: Monster[] = [];
 
-    for (let mi = 0; mi < line.monsters.length; mi += 1) {
-      const monster = line.monsters[mi];
+    for (const monster of line.monsters) {
       if (line.cachedPath.length === 0) {
         monster.state = 'attacking';
       }
 
       if (monster.state === 'attacking') {
-        const tower = line.towers.find((t) => t.completed);
+        const tower = getBlockingTower(line);
         if (tower) {
           tower.hp -= monster.damage * (deltaMs / 1000);
           if (tower.hp <= 0) {
@@ -591,6 +645,7 @@ function updateMonsters(lines: LineState[], deltaMs: number): { lifeLoss: number
             line.cachedPath = aStar(line.grid, line.spawn, line.goal) ?? [];
           }
         }
+
         monster.state = line.cachedPath.length > 0 ? 'moving' : 'attacking';
       }
 
@@ -602,7 +657,8 @@ function updateMonsters(lines: LineState[], deltaMs: number): { lifeLoss: number
           monster.x = line.cachedPath[monster.pathIndex].x;
           monster.y = line.cachedPath[monster.pathIndex].y;
         }
-        if (monster.pathIndex >= line.cachedPath.length - 1) {
+
+        if (monster.pathIndex >= line.cachedPath.length - 1 && line.cachedPath.length > 0) {
           lifeLoss += 1;
           continue;
         }
@@ -611,27 +667,28 @@ function updateMonsters(lines: LineState[], deltaMs: number): { lifeLoss: number
       alive.push(monster);
     }
 
-    for (let ti = 0; ti < line.towers.length; ti += 1) {
-      const tower = line.towers[ti];
-      const target = alive.find((m) => manhattan(m, tower) <= 3);
+    for (const tower of line.towers) {
+      if (!tower.completed) {
+        continue;
+      }
+      const target = alive.find((monster) => manhattan(monster, tower) <= 3);
       if (target) {
         target.hp -= 15 * (deltaMs / 1000);
       }
     }
 
-    for (let hi = 0; hi < state.heroUnits.length; hi += 1) {
-      const hero = state.heroUnits[hi];
+    for (const hero of heroUnits) {
       if (hero.lineId !== line.id) {
         continue;
       }
-      const target = alive.find((m) => manhattan(m, hero) <= state.selectedHero.range);
+      const target = alive.find((monster) => manhattan(monster, hero) <= selectedHero.range);
       if (target) {
-        target.hp -= state.selectedHero.dps * (deltaMs / 1000);
+        target.hp -= selectedHero.dps * (deltaMs / 1000);
       }
     }
 
-    line.monsters = alive.filter((m) => {
-      if (m.hp <= 0) {
+    line.monsters = alive.filter((monster) => {
+      if (monster.hp <= 0) {
         goldGain += MONSTER_REWARD;
         return false;
       }
@@ -652,9 +709,10 @@ function updateWave(lines: LineState[], wave: WaveState, deltaMs: number): WaveS
     nextWave.spawnTimerMs -= nextWave.spawnIntervalMs;
     const lineId = nextWave.enemiesSpawned % LINE_COUNT;
     const line = getLine(lines, lineId);
-    if (line.monsters.length >= 120) {
+    if (line.monsters.length >= MAX_MONSTERS_PER_LINE) {
       continue;
     }
+
     monsterCounter += 1;
     line.monsters.push({
       id: `monster-${monsterCounter}`,
@@ -685,15 +743,17 @@ function frame(time: number) {
   if (!loopStarted) {
     return;
   }
+
   if (lastFrame === 0) {
     lastFrame = time;
   }
+
   const deltaMs = Math.min(100, time - lastFrame);
   lastFrame = time;
 
   const linesNext = state.lines.map(cloneLine);
   updateWorkers(linesNext, deltaMs, time);
-  const monsterResult = updateMonsters(linesNext, deltaMs);
+  const monsterResult = updateMonsters(linesNext, deltaMs, state.heroUnits, state.selectedHero);
   const waveNext = updateWave(linesNext, state.wave, deltaMs);
   const life = Math.max(0, state.life - monsterResult.lifeLoss);
 
@@ -713,6 +773,7 @@ function subscribe(listener: () => void) {
     loopStarted = true;
     requestAnimationFrame(frame);
   }
+
   return () => {
     const idx = listeners.indexOf(listener);
     if (idx >= 0) {
