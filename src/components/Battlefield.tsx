@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { DimensionValue, LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import type { Point, Worker } from '@/src/store/gameStore';
+import { BuildPreview } from '@/src/components/BuildPreview';
+import type { Point, SelectedEntity } from '@/src/store/gameStore';
 import { theme } from '@/src/theme/theme';
 
 interface BattlefieldProps {
@@ -9,10 +10,11 @@ interface BattlefieldProps {
   castlePosition: Point;
   defenders: Array<{ id: string; kind: 'tower' | 'hero'; position: Point; level: number }>;
   enemies: Array<{ id: string; hp: number; maxHp: number; position: Point }>;
-  workers: Worker[];
-  selectedWorkerId: string | null;
-  isTowerPlacementMode: boolean;
+  workers: Array<{ id: string; x: number; y: number; state: string }>;
+  selectedEntity: SelectedEntity;
+  buildPreview: { point: Point; valid: boolean } | null;
   progressLabel: string;
+  onHoverMap: (point: Point) => void;
   onPressMap: (point: Point) => void;
 }
 
@@ -29,9 +31,10 @@ export function Battlefield({
   defenders,
   enemies,
   workers,
-  selectedWorkerId,
-  isTowerPlacementMode,
+  selectedEntity,
+  buildPreview,
   progressLabel,
+  onHoverMap,
   onPressMap,
 }: BattlefieldProps) {
   const [canvasSize, setCanvasSize] = useState({ width: 1, height: 1 });
@@ -42,9 +45,11 @@ export function Battlefield({
 
   const defenderNodes = defenders.map((defender) => {
     const color = defender.kind === 'hero' ? theme.colors.secondary : theme.colors.primary;
+    const selected = selectedEntity?.id === defender.id;
     return (
       <View key={defender.id} style={[styles.defender, pointToStyle(defender.position), { borderColor: color }]}>
         <Text style={styles.markerLabel}>{defender.kind === 'hero' ? 'H' : defender.level === 2 ? 'T2' : 'T1'}</Text>
+        {selected ? <View style={styles.selectionRing} /> : null}
       </View>
     );
   });
@@ -55,28 +60,31 @@ export function Battlefield({
     </View>
   ));
 
-  const workerNodes = workers.map((worker) => (
-    <View
-      key={worker.id}
-      style={[
-        styles.worker,
-        pointToStyle({ x: worker.x, y: worker.y }),
-        selectedWorkerId === worker.id && styles.selectedWorker,
-      ]}
-    >
-      <Text style={styles.workerLabel}>W</Text>
-    </View>
-  ));
+  const workerNodes = workers.map((worker) => {
+    const selected = selectedEntity?.id === worker.id;
+    return (
+      <View key={worker.id} style={[styles.worker, pointToStyle({ x: worker.x, y: worker.y })]}>
+        <Text style={styles.workerLabel}>W</Text>
+        {selected ? <View style={styles.selectionRing} /> : null}
+      </View>
+    );
+  });
 
   return (
     <View style={styles.mapArea}>
       <Text style={styles.mapLabel}>Selected Lane Field</Text>
       <Text style={styles.subLabel}>{progressLabel}</Text>
       <Pressable
-        style={[styles.mapCanvas, isTowerPlacementMode && styles.mapPlacementMode]}
+        style={styles.mapCanvas}
         onLayout={(event: LayoutChangeEvent) => {
           const { width, height } = event.nativeEvent.layout;
           setCanvasSize({ width: Math.max(1, width), height: Math.max(1, height) });
+        }}
+        onHoverIn={(event) => {
+          const { locationX, locationY } = event.nativeEvent;
+          const x = Math.max(4, Math.min(96, (locationX / canvasSize.width) * 100));
+          const y = Math.max(4, Math.min(96, (locationY / canvasSize.height) * 100));
+          onHoverMap({ x, y });
         }}
         onPress={(event) => {
           const { locationX, locationY } = event.nativeEvent;
@@ -92,6 +100,7 @@ export function Battlefield({
         {defenderNodes}
         {workerNodes}
         {enemyNodes}
+        {buildPreview ? <BuildPreview point={buildPreview.point} valid={buildPreview.valid} /> : null}
       </Pressable>
     </View>
   );
@@ -126,10 +135,6 @@ const styles = StyleSheet.create({
     borderColor: '#1E293B',
     overflow: 'hidden',
   },
-  mapPlacementMode: {
-    borderColor: theme.colors.gold,
-    borderWidth: 2,
-  },
   pathDot: {
     position: 'absolute',
     width: 8,
@@ -137,6 +142,15 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.pill,
     backgroundColor: '#334155',
     transform: [{ translateX: -4 }, { translateY: -4 }],
+  },
+  selectionRing: {
+    position: 'absolute',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: theme.colors.gold,
+    transform: [{ translateX: -3 }, { translateY: -3 }],
   },
   castle: {
     position: 'absolute',
@@ -183,10 +197,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     transform: [{ translateX: -9 }, { translateY: -9 }],
-  },
-  selectedWorker: {
-    borderColor: theme.colors.gold,
-    borderWidth: 2,
   },
   workerLabel: {
     color: theme.colors.textPrimary,
