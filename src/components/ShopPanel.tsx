@@ -8,10 +8,32 @@ import { theme } from '@/src/theme/theme';
 interface ShopPanelProps {
   visible: boolean;
   onClose: () => void;
-  onBuyTurret: () => void;
+  onBuyTower: () => void;
+  onSummonMarine: () => void;
+  onSummonFirebat: () => void;
+  onSummonHero: () => void;
+  onEvolveHero: () => void;
+  disableBuyTower?: boolean;
+  disableSummonMarine?: boolean;
+  disableSummonFirebat?: boolean;
+  disableSummonHero?: boolean;
+  disableEvolveHero?: boolean;
 }
 
-export function ShopPanel({ visible, onClose, onBuyTurret }: ShopPanelProps) {
+export function ShopPanel({
+  visible,
+  onClose,
+  onBuyTower,
+  onSummonMarine,
+  onSummonFirebat,
+  onSummonHero,
+  onEvolveHero,
+  disableBuyTower = false,
+  disableSummonMarine = false,
+  disableSummonFirebat = false,
+  disableSummonHero = false,
+  disableEvolveHero = false,
+}: ShopPanelProps) {
   const translateY = useSharedValue(420);
 
   useEffect(() => {
@@ -27,15 +49,31 @@ export function ShopPanel({ visible, onClose, onBuyTurret }: ShopPanelProps) {
       {visible ? <Pressable style={styles.backdrop} onPress={onClose} /> : null}
       <Animated.View style={[styles.panel, panelStyle]} pointerEvents={visible ? 'auto' : 'none'}>
         <View style={styles.handle} />
-        <Text style={styles.title}>Shop</Text>
+        <Text style={styles.title}>Defense Shop</Text>
+
         <View style={styles.itemCard}>
-          <View style={styles.itemInfo}>
-            <Text style={styles.itemName}>Pulse Turret</Text>
-            <Text style={styles.itemDescription}>Fast single-target DPS turret.</Text>
-            <Text style={styles.itemPrice}>120 Gold</Text>
-          </View>
-          <PrimaryButton onPress={onBuyTurret} style={styles.buyButton}>
-            Buy
+          <Text style={styles.itemName}>Bunker Tower</Text>
+          <Text style={styles.itemDescription}>길목 옆 기본 구조물 설치 (120 Gold)</Text>
+          <PrimaryButton onPress={onBuyTower} style={styles.buyButton} disabled={disableBuyTower}>
+            Build Tower
+          </PrimaryButton>
+        </View>
+
+        <View style={styles.row}>
+          <PrimaryButton onPress={onSummonMarine} style={styles.rowButton} disabled={disableSummonMarine}>
+            Marine 70
+          </PrimaryButton>
+          <PrimaryButton onPress={onSummonFirebat} style={styles.rowButton} disabled={disableSummonFirebat}>
+            Firebat 90
+          </PrimaryButton>
+        </View>
+
+        <View style={styles.row}>
+          <PrimaryButton onPress={onSummonHero} style={styles.rowButton} disabled={disableSummonHero}>
+            Hero 220
+          </PrimaryButton>
+          <PrimaryButton onPress={onEvolveHero} style={styles.rowButton} disabled={disableEvolveHero}>
+            Evolve 180
           </PrimaryButton>
         </View>
       </Animated.View>
@@ -84,9 +122,6 @@ const styles = StyleSheet.create({
     padding: theme.spacing.md,
     gap: theme.spacing.md,
   },
-  itemInfo: {
-    gap: theme.spacing.xs,
-  },
   itemName: {
     color: theme.colors.textPrimary,
     fontSize: 16,
@@ -97,13 +132,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
   },
-  itemPrice: {
-    color: theme.colors.gold,
-    fontSize: 15,
-    fontWeight: '700',
-  },
   buyButton: {
     alignSelf: 'flex-start',
-    minWidth: 96,
+    minWidth: 132,
+  },
+  row: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  rowButton: {
+    flex: 1,
   },
 });

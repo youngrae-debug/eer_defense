@@ -19,6 +19,7 @@ export function HeroCard({ hero }: HeroCardProps) {
         </Text>
         <Text style={styles.meta}>DPS {hero.dps}</Text>
         <Text style={styles.meta}>RANGE {hero.range}</Text>
+        <Text style={styles.meta}>LV {hero.level} · {hero.rarity.toUpperCase()}</Text>
       </View>
     </View>
   );
