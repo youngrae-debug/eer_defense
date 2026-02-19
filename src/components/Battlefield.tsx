@@ -4,7 +4,8 @@ import type { Defender, Enemy, Point } from '@/src/store/gameStore';
 import { theme } from '@/src/theme/theme';
 
 interface BattlefieldProps {
-  path: Point[];
+  lanes: Point[][];
+  castlePosition: Point;
   defenders: Defender[];
   enemies: Enemy[];
   progressLabel: string;
@@ -17,16 +18,23 @@ function pointToStyle(point: Point): { left: DimensionValue; top: DimensionValue
   };
 }
 
-export function Battlefield({ path, defenders, enemies, progressLabel }: BattlefieldProps) {
-  const pathDots = path.map((point, index) => (
-    <View key={`path-${index}`} style={[styles.pathDot, pointToStyle(point)]} />
-  ));
+export function Battlefield({ lanes, castlePosition, defenders, enemies, progressLabel }: BattlefieldProps) {
+  const laneDots = lanes.flatMap((lane, laneIndex) =>
+    lane.map((point, pointIndex) => (
+      <View
+        key={`lane-${laneIndex}-point-${pointIndex}`}
+        style={[styles.pathDot, pointToStyle(point)]}
+      />
+    ))
+  );
 
   const defenderNodes = defenders.map((defender) => {
     const color = defender.unitType === 'hero' ? theme.colors.secondary : theme.colors.primary;
     return (
       <View key={defender.id} style={[styles.defender, pointToStyle(defender.position), { borderColor: color }]}>
-        <Text style={styles.markerLabel}>{defender.unitType === 'hero' ? 'H' : defender.unitType === 'marine' ? 'M' : 'F'}</Text>
+        <Text style={styles.markerLabel}>
+          {defender.unitType === 'hero' ? 'H' : defender.unitType === 'marine' ? 'M' : 'F'}
+        </Text>
       </View>
     );
   });
@@ -39,10 +47,13 @@ export function Battlefield({ path, defenders, enemies, progressLabel }: Battlef
 
   return (
     <View style={styles.mapArea}>
-      <Text style={styles.mapLabel}>Path Defense Field</Text>
+      <Text style={styles.mapLabel}>6-Lane Defense Field</Text>
       <Text style={styles.subLabel}>{progressLabel}</Text>
       <View style={styles.mapCanvas}>
-        {pathDots}
+        {laneDots}
+        <View style={[styles.castle, pointToStyle(castlePosition)]}>
+          <Text style={styles.castleLabel}>CASTLE</Text>
+        </View>
         {defenderNodes}
         {enemyNodes}
       </View>
@@ -86,6 +97,24 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.pill,
     backgroundColor: '#334155',
     transform: [{ translateX: -4 }, { translateY: -4 }],
+  },
+  castle: {
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 2,
+    borderColor: theme.colors.gold,
+    backgroundColor: '#422006',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transform: [{ translateX: -22 }, { translateY: -22 }],
+  },
+  castleLabel: {
+    color: theme.colors.textPrimary,
+    fontSize: 8,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
   defender: {
     position: 'absolute',

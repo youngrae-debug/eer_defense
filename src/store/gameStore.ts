@@ -2,14 +2,6 @@ import { useSyncExternalStore } from 'react';
 
 export type UnitType = 'marine' | 'firebat' | 'hero';
 export type Rarity = 'common' | 'rare' | 'epic' | 'legendary' | 'mythic';
-export type ProgressStep =
-  | 'build_tower'
-  | 'summon_marine'
-  | 'start_wave'
-  | 'clear_wave'
-  | 'summon_hero'
-  | 'evolve_hero'
-  | 'free_play';
 
 interface Point {
   x: number;
@@ -35,6 +27,7 @@ interface Defender {
   attackCooldownMs: number;
   cooldownRemainingMs: number;
   level: number;
+  laneId: number;
 }
 
 interface Enemy {
@@ -43,6 +36,7 @@ interface Enemy {
   maxHp: number;
   speed: number;
   rewardGold: number;
+  laneId: number;
   pathIndex: number;
   progress: number;
   position: Point;
@@ -64,25 +58,23 @@ interface WaveState {
   spawnTimerMs: number;
 }
 
-interface ProgressState {
-  step: ProgressStep;
-  message: string;
-}
-
 interface GameState {
   life: number;
   gold: number;
-  path: Point[];
+  castlePosition: Point;
+  lanes: Point[][];
+  selectedLane: number;
+  laneBuildCounts: number[];
   defenders: Defender[];
   enemies: Enemy[];
   wave: WaveState;
   selectedHero: Hero;
   isShopOpen: boolean;
   skill: SkillState;
-  progress: ProgressState;
 }
 
 interface GameActions {
+  selectLane: (laneId: number) => void;
   startNextWave: () => void;
   toggleShop: () => void;
   closeShop: () => void;
@@ -96,36 +88,50 @@ interface GameActions {
 
 type GameStore = GameState & GameActions;
 
+const LANE_COUNT = 6;
 const SKILL_COOLDOWN_MS = 7000;
 const BASE_ENEMY_HP = 55;
+const MAX_STRUCTURES_PER_LANE = 5;
 
-const progressMessages: Record<ProgressStep, string> = {
-  build_tower: 'STEP 1: 상점에서 구조물을 1개 설치하세요.',
-  summon_marine: 'STEP 2: Marine 유닛을 소환하세요.',
-  start_wave: 'STEP 3: Start Wave로 전투를 시작하세요.',
-  clear_wave: 'STEP 4: 현재 웨이브를 방어해 클리어하세요.',
-  summon_hero: 'STEP 5: Hero를 소환해 화력을 보강하세요.',
-  evolve_hero: 'STEP 6: Hero를 진화시켜 핵심 딜러로 만드세요.',
-  free_play: 'FREE PLAY: 웨이브를 올리며 방어선을 최적화하세요.',
-};
+const castlePosition: Point = { x: 50, y: 50 };
 
-const pathTemplate: Point[] = [
-  { x: 0, y: 45 },
-  { x: 20, y: 45 },
-  { x: 20, y: 20 },
-  { x: 55, y: 20 },
-  { x: 55, y: 70 },
-  { x: 82, y: 70 },
-  { x: 82, y: 45 },
-  { x: 100, y: 45 },
-];
-
-const defenseSlots: Point[] = [
-  { x: 12, y: 32 },
-  { x: 30, y: 58 },
-  { x: 46, y: 36 },
-  { x: 66, y: 62 },
-  { x: 74, y: 28 },
+const lanes: Point[][] = [
+  [
+    { x: 2, y: 20 },
+    { x: 22, y: 24 },
+    { x: 36, y: 35 },
+    castlePosition,
+  ],
+  [
+    { x: 2, y: 50 },
+    { x: 20, y: 50 },
+    { x: 34, y: 50 },
+    castlePosition,
+  ],
+  [
+    { x: 2, y: 80 },
+    { x: 22, y: 76 },
+    { x: 36, y: 65 },
+    castlePosition,
+  ],
+  [
+    { x: 98, y: 20 },
+    { x: 78, y: 24 },
+    { x: 64, y: 35 },
+    castlePosition,
+  ],
+  [
+    { x: 98, y: 50 },
+    { x: 80, y: 50 },
+    { x: 66, y: 50 },
+    castlePosition,
+  ],
+  [
+    { x: 98, y: 80 },
+    { x: 78, y: 76 },
+    { x: 64, y: 65 },
+    castlePosition,
+  ],
 ];
 
 let enemyId = 0;
@@ -150,16 +156,39 @@ function getSegmentLength(path: Point[], index: number) {
   return distance(start, end);
 }
 
-function createEnemy(waveNumber: number): Enemy {
+function getLaneSlotPoint(laneId: number, slotIndex: number): Point {
+  const lane = lanes[laneId];
+  const center = lane[lane.length - 1];
+  const start = lane[0];
+  const nearCenter = lane[lane.length - 2];
+  const ratio = clamp(0.32 + slotIndex * 0.14, 0.32, 0.82);
+  const baseX = start.x + (nearCenter.x - start.x) * ratio;
+  const baseY = start.y + (nearCenter.y - start.y) * ratio;
+
+  const dirX = center.x - baseX;
+  const dirY = center.y - baseY;
+  const length = Math.sqrt(dirX * dirX + dirY * dirY) || 1;
+  const perpX = -dirY / length;
+  const perpY = dirX / length;
+
+  const side = laneId < 3 ? 1 : -1;
+  return {
+    x: clamp(baseX + perpX * 5 * side, 6, 94),
+    y: clamp(baseY + perpY * 5 * side, 6, 94),
+  };
+}
+
+function createEnemy(waveNumber: number, laneId: number): Enemy {
   const hp = BASE_ENEMY_HP + waveNumber * 18;
-  const start = pathTemplate[0];
+  const start = lanes[laneId][0];
   enemyId += 1;
   return {
     id: `enemy-${enemyId}`,
     hp,
     maxHp: hp,
-    speed: 12 + waveNumber * 0.8,
+    speed: 11 + waveNumber * 0.75,
     rewardGold: 12 + waveNumber * 2,
+    laneId,
     pathIndex: 0,
     progress: 0,
     position: { ...start },
@@ -167,60 +196,67 @@ function createEnemy(waveNumber: number): Enemy {
   };
 }
 
-function createDefender(type: UnitType, slotIndex: number): Defender {
+function createDefender(type: UnitType, laneId: number, slotIndex: number): Defender {
   defenderId += 1;
-  const slot = defenseSlots[slotIndex % defenseSlots.length];
+  const slot = getLaneSlotPoint(laneId, slotIndex);
+
   if (type === 'hero') {
     return {
       id: `defender-${defenderId}`,
       kind: 'hero',
       unitType: 'hero',
       position: slot,
-      range: 28,
-      damage: 22,
+      range: 30,
+      damage: 24,
       attackCooldownMs: 700,
       cooldownRemainingMs: 0,
       level: 1,
+      laneId,
     };
   }
+
   if (type === 'firebat') {
     return {
       id: `defender-${defenderId}`,
       kind: 'tower',
       unitType: 'firebat',
       position: slot,
-      range: 18,
+      range: 19,
       damage: 14,
-      attackCooldownMs: 550,
+      attackCooldownMs: 560,
       cooldownRemainingMs: 0,
       level: 1,
+      laneId,
     };
   }
+
   return {
     id: `defender-${defenderId}`,
     kind: 'tower',
     unitType: 'marine',
     position: slot,
-    range: 24,
+    range: 25,
     damage: 10,
     attackCooldownMs: 500,
     cooldownRemainingMs: 0,
     level: 1,
+    laneId,
   };
 }
 
-function moveEnemy(enemy: Enemy, deltaMs: number, path: Point[]) {
+function moveEnemy(enemy: Enemy, deltaMs: number) {
   if (!enemy.alive) {
     return enemy;
   }
 
+  const lane = lanes[enemy.laneId];
   let next = { ...enemy };
   let remainingDistance = (next.speed * deltaMs) / 1000;
 
   while (remainingDistance > 0) {
-    const segmentLength = getSegmentLength(path, next.pathIndex);
+    const segmentLength = getSegmentLength(lane, next.pathIndex);
     if (segmentLength <= 0) {
-      return { ...next, alive: false, position: { ...path[path.length - 1] } };
+      return { ...next, alive: false, position: { ...lane[lane.length - 1] } };
     }
 
     const remainingOnSegment = segmentLength - next.progress;
@@ -230,8 +266,8 @@ function moveEnemy(enemy: Enemy, deltaMs: number, path: Point[]) {
       next.progress = 0;
       remainingDistance -= remainingOnSegment;
 
-      if (next.pathIndex >= path.length - 1) {
-        return { ...next, alive: false, position: { ...path[path.length - 1] } };
+      if (next.pathIndex >= lane.length - 1) {
+        return { ...next, alive: false, position: { ...lane[lane.length - 1] } };
       }
     } else {
       next.progress += remainingDistance;
@@ -239,9 +275,9 @@ function moveEnemy(enemy: Enemy, deltaMs: number, path: Point[]) {
     }
   }
 
-  const start = path[next.pathIndex];
-  const end = path[next.pathIndex + 1];
-  const segmentLength = getSegmentLength(path, next.pathIndex);
+  const start = lane[next.pathIndex];
+  const end = lane[next.pathIndex + 1];
+  const segmentLength = getSegmentLength(lane, next.pathIndex);
   const ratio = segmentLength > 0 ? next.progress / segmentLength : 0;
 
   next.position = {
@@ -261,15 +297,6 @@ function setState(partial: Partial<GameStore>) {
   listeners.forEach((listener) => listener());
 }
 
-function setProgress(step: ProgressStep) {
-  setState({
-    progress: {
-      step,
-      message: progressMessages[step],
-    },
-  });
-}
-
 function subscribe(listener: () => void) {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -278,8 +305,11 @@ function subscribe(listener: () => void) {
 function initializeStore(): GameStore {
   return {
     life: 20,
-    gold: 220,
-    path: pathTemplate,
+    gold: 500,
+    castlePosition,
+    lanes,
+    selectedLane: 0,
+    laneBuildCounts: Array.from({ length: LANE_COUNT }, () => 0),
     defenders: [],
     enemies: [],
     wave: {
@@ -293,8 +323,8 @@ function initializeStore(): GameStore {
     selectedHero: {
       id: 'hero-profile-1',
       name: 'Duke Nova',
-      dps: 22,
-      range: 28,
+      dps: 24,
+      range: 30,
       rarity: 'rare',
       level: 1,
     },
@@ -304,19 +334,18 @@ function initializeStore(): GameStore {
       cooldownRemainingMs: 0,
       cooldownTotalMs: SKILL_COOLDOWN_MS,
     },
-    progress: {
-      step: 'build_tower',
-      message: progressMessages.build_tower,
+    selectLane: (laneId) => {
+      if (laneId < 0 || laneId >= LANE_COUNT) {
+        return;
+      }
+      setState({ selectedLane: laneId });
     },
     startNextWave: () => {
       if (state.wave.active) {
         return;
       }
-      if (state.progress.step !== 'start_wave' && state.progress.step !== 'free_play') {
-        return;
-      }
       const nextWaveNumber = state.wave.waveNumber + 1;
-      const count = 5 + nextWaveNumber * 2;
+      const count = 12 + nextWaveNumber * 4;
       setState({
         wave: {
           ...state.wave,
@@ -324,34 +353,34 @@ function initializeStore(): GameStore {
           waveNumber: nextWaveNumber,
           enemiesToSpawn: count,
           enemiesSpawned: 0,
-          spawnIntervalMs: clamp(900 - nextWaveNumber * 45, 260, 900),
+          spawnIntervalMs: clamp(820 - nextWaveNumber * 40, 220, 820),
           spawnTimerMs: 0,
         },
       });
-      if (state.progress.step === 'start_wave') {
-        setProgress('clear_wave');
-      }
     },
     toggleShop: () => setState({ isShopOpen: !state.isShopOpen }),
     closeShop: () => setState({ isShopOpen: false }),
     buyTower: () => {
-      const cost = 120;
+      const cost = 100;
       if (state.gold < cost) {
         return false;
       }
-      if (state.progress.step !== 'build_tower' && state.progress.step !== 'free_play') {
+
+      const laneId = state.selectedLane;
+      const laneCount = state.laneBuildCounts[laneId];
+      if (laneCount >= MAX_STRUCTURES_PER_LANE) {
         return false;
       }
 
-      const newDefender = createDefender('marine', state.defenders.length);
+      const newDefender = createDefender('marine', laneId, laneCount);
+      const nextLaneBuildCounts = [...state.laneBuildCounts];
+      nextLaneBuildCounts[laneId] += 1;
+
       setState({
         gold: state.gold - cost,
         defenders: [...state.defenders, newDefender],
+        laneBuildCounts: nextLaneBuildCounts,
       });
-
-      if (state.progress.step === 'build_tower') {
-        setProgress('summon_marine');
-      }
       return true;
     },
     summonUnit: (type) => {
@@ -360,59 +389,49 @@ function initializeStore(): GameStore {
         return false;
       }
 
-      if (state.progress.step === 'summon_marine' && type !== 'marine') {
-        return false;
-      }
-      if (
-        !['summon_marine', 'start_wave', 'clear_wave', 'summon_hero', 'evolve_hero', 'free_play'].includes(
-          state.progress.step
-        )
-      ) {
+      const laneId = state.selectedLane;
+      const laneCount = state.laneBuildCounts[laneId];
+      if (laneCount >= MAX_STRUCTURES_PER_LANE) {
         return false;
       }
 
-      const newDefender = createDefender(type, state.defenders.length);
+      const newDefender = createDefender(type, laneId, laneCount);
+      const nextLaneBuildCounts = [...state.laneBuildCounts];
+      nextLaneBuildCounts[laneId] += 1;
+
       setState({
         gold: state.gold - cost,
         defenders: [...state.defenders, newDefender],
+        laneBuildCounts: nextLaneBuildCounts,
       });
-
-      if (state.progress.step === 'summon_marine') {
-        setProgress('start_wave');
-      }
       return true;
     },
     summonHero: () => {
-      const cost = 220;
+      const cost = 200;
       if (state.gold < cost) {
         return false;
       }
-      if (state.progress.step !== 'summon_hero' && state.progress.step !== 'free_play') {
+
+      const laneId = state.selectedLane;
+      const laneCount = state.laneBuildCounts[laneId];
+      if (laneCount >= MAX_STRUCTURES_PER_LANE) {
         return false;
       }
 
-      const heroDefender = createDefender('hero', state.defenders.length);
-      const rarity: Rarity = state.selectedHero.level >= 5 ? 'epic' : 'rare';
+      const heroDefender = createDefender('hero', laneId, laneCount);
+      const nextLaneBuildCounts = [...state.laneBuildCounts];
+      nextLaneBuildCounts[laneId] += 1;
+
       setState({
         gold: state.gold - cost,
         defenders: [...state.defenders, heroDefender],
-        selectedHero: {
-          ...state.selectedHero,
-          rarity,
-        },
+        laneBuildCounts: nextLaneBuildCounts,
       });
-
-      if (state.progress.step === 'summon_hero') {
-        setProgress('evolve_hero');
-      }
       return true;
     },
     evolveHero: () => {
-      const cost = 180;
+      const cost = 160;
       if (state.gold < cost) {
-        return false;
-      }
-      if (state.progress.step !== 'evolve_hero' && state.progress.step !== 'free_play') {
         return false;
       }
 
@@ -443,10 +462,6 @@ function initializeStore(): GameStore {
           rarity,
         },
       });
-
-      if (state.progress.step === 'evolve_hero') {
-        setProgress('free_play');
-      }
       return true;
     },
     triggerSkill: () => {
@@ -458,6 +473,7 @@ function initializeStore(): GameStore {
         ...enemy,
         hp: enemy.hp - burstDamage,
       }));
+
       const survivors: Enemy[] = [];
       let bonusGold = 0;
       damaged.forEach((enemy) => {
@@ -481,7 +497,7 @@ function initializeStore(): GameStore {
     tick: (deltaMs) => {
       let nextLife = state.life;
       let nextGold = state.gold;
-      let nextEnemies = state.enemies.map((enemy) => moveEnemy(enemy, deltaMs, state.path));
+      let nextEnemies = state.enemies.map((enemy) => moveEnemy(enemy, deltaMs));
 
       const filteredByLife: Enemy[] = [];
       nextEnemies.forEach((enemy) => {
@@ -547,15 +563,13 @@ function initializeStore(): GameStore {
           nextWave.enemiesSpawned < nextWave.enemiesToSpawn
         ) {
           nextWave.spawnTimerMs -= nextWave.spawnIntervalMs;
+          const laneId = nextWave.enemiesSpawned % LANE_COUNT;
           nextWave.enemiesSpawned += 1;
-          nextEnemies.push(createEnemy(nextWave.waveNumber));
+          nextEnemies.push(createEnemy(nextWave.waveNumber, laneId));
         }
       }
 
-      const clearedWave =
-        nextWave.active && nextWave.enemiesSpawned >= nextWave.enemiesToSpawn && nextEnemies.length === 0;
-
-      if (clearedWave) {
+      if (nextWave.active && nextWave.enemiesSpawned >= nextWave.enemiesToSpawn && nextEnemies.length === 0) {
         nextWave = {
           ...nextWave,
           active: false,
@@ -574,7 +588,7 @@ function initializeStore(): GameStore {
 
       if (nextLife <= 0) {
         nextLife = 20;
-        nextGold = 220;
+        nextGold = 500;
         nextEnemies = [];
         nextWave = {
           active: false,
@@ -594,10 +608,6 @@ function initializeStore(): GameStore {
         wave: nextWave,
         skill: nextSkill,
       });
-
-      if (clearedWave && state.progress.step === 'clear_wave') {
-        setProgress('summon_hero');
-      }
     },
   };
 }

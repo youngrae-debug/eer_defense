@@ -13,11 +13,6 @@ interface ShopPanelProps {
   onSummonFirebat: () => void;
   onSummonHero: () => void;
   onEvolveHero: () => void;
-  disableBuyTower?: boolean;
-  disableSummonMarine?: boolean;
-  disableSummonFirebat?: boolean;
-  disableSummonHero?: boolean;
-  disableEvolveHero?: boolean;
 }
 
 export function ShopPanel({
@@ -28,11 +23,6 @@ export function ShopPanel({
   onSummonFirebat,
   onSummonHero,
   onEvolveHero,
-  disableBuyTower = false,
-  disableSummonMarine = false,
-  disableSummonFirebat = false,
-  disableSummonHero = false,
-  disableEvolveHero = false,
 }: ShopPanelProps) {
   const translateY = useSharedValue(420);
 
@@ -53,27 +43,27 @@ export function ShopPanel({
 
         <View style={styles.itemCard}>
           <Text style={styles.itemName}>Bunker Tower</Text>
-          <Text style={styles.itemDescription}>길목 옆 기본 구조물 설치 (120 Gold)</Text>
-          <PrimaryButton onPress={onBuyTower} style={styles.buyButton} disabled={disableBuyTower}>
+          <Text style={styles.itemDescription}>선택한 Lane에 기본 구조물 설치 (100 Gold)</Text>
+          <PrimaryButton onPress={onBuyTower} style={styles.buyButton}>
             Build Tower
           </PrimaryButton>
         </View>
 
         <View style={styles.row}>
-          <PrimaryButton onPress={onSummonMarine} style={styles.rowButton} disabled={disableSummonMarine}>
+          <PrimaryButton onPress={onSummonMarine} style={styles.rowButton}>
             Marine 70
           </PrimaryButton>
-          <PrimaryButton onPress={onSummonFirebat} style={styles.rowButton} disabled={disableSummonFirebat}>
+          <PrimaryButton onPress={onSummonFirebat} style={styles.rowButton}>
             Firebat 90
           </PrimaryButton>
         </View>
 
         <View style={styles.row}>
-          <PrimaryButton onPress={onSummonHero} style={styles.rowButton} disabled={disableSummonHero}>
-            Hero 220
+          <PrimaryButton onPress={onSummonHero} style={styles.rowButton}>
+            Hero 200
           </PrimaryButton>
-          <PrimaryButton onPress={onEvolveHero} style={styles.rowButton} disabled={disableEvolveHero}>
-            Evolve 180
+          <PrimaryButton onPress={onEvolveHero} style={styles.rowButton}>
+            Evolve 160
           </PrimaryButton>
         </View>
       </Animated.View>

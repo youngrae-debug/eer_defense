@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Battlefield } from '@/src/components/Battlefield';
@@ -10,19 +10,22 @@ import { ShopPanel } from '@/src/components/ShopPanel';
 import { SkillButton } from '@/src/components/SkillButton';
 import { useGameStore } from '@/src/store/gameStore';
 import { theme } from '@/src/theme/theme';
+import { Text } from 'react-native';
 
 export function GameScreen() {
   const {
     life,
     gold,
-    path,
+    lanes,
+    castlePosition,
+    selectedLane,
     defenders,
     enemies,
     selectedHero,
     isShopOpen,
     skill,
     wave,
-    progress,
+    selectLane,
     startNextWave,
     toggleShop,
     closeShop,
@@ -47,42 +50,43 @@ export function GameScreen() {
   const progressLabel =
     wave.active || wave.enemiesToSpawn > 0
       ? `Wave ${wave.waveNumber} · Spawn ${wave.enemiesSpawned}/${wave.enemiesToSpawn} · Enemies ${enemies.length}`
-      : '웨이브 시작을 눌러 전투를 시작하세요';
-
-  const startWaveDisabled =
-    wave.active || (progress.step !== 'start_wave' && progress.step !== 'free_play');
-
-  const disableBuyTower = !(progress.step === 'build_tower' || progress.step === 'free_play');
-  const disableSummonMarine = !(
-    progress.step === 'summon_marine' ||
-    progress.step === 'start_wave' ||
-    progress.step === 'clear_wave' ||
-    progress.step === 'summon_hero' ||
-    progress.step === 'evolve_hero' ||
-    progress.step === 'free_play'
-  );
-  const disableSummonFirebat = !(progress.step === 'start_wave' || progress.step === 'clear_wave' || progress.step === 'free_play');
-  const disableSummonHero = !(progress.step === 'summon_hero' || progress.step === 'free_play');
-  const disableEvolveHero = !(progress.step === 'evolve_hero' || progress.step === 'free_play');
+      : 'Start Wave를 눌러 6개 길 방어를 시작하세요';
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
         <HUD wave={wave.waveNumber} gold={gold} life={life} waveActive={wave.active} />
 
-        <View style={styles.progressCard}>
-          <Text style={styles.progressTitle}>Mission Flow</Text>
-          <Text style={styles.progressText}>{progress.message}</Text>
+        <View style={styles.laneSelector}>
+          {lanes.map((_, laneId) => (
+            <Pressable
+              key={`lane-button-${laneId}`}
+              onPress={() => {
+                selectLane(laneId);
+              }}
+              style={[styles.laneButton, selectedLane === laneId && styles.laneButtonActive]}
+            >
+              <Text style={[styles.laneLabel, selectedLane === laneId && styles.laneLabelActive]}>
+                Lane {laneId + 1}
+              </Text>
+            </Pressable>
+          ))}
         </View>
 
-        <Battlefield path={path} defenders={defenders} enemies={enemies} progressLabel={progressLabel} />
+        <Battlefield
+          lanes={lanes}
+          castlePosition={castlePosition}
+          defenders={defenders}
+          enemies={enemies}
+          progressLabel={progressLabel}
+        />
 
         <View style={styles.bottomPanel}>
           <HeroCard hero={selectedHero} />
 
           <View style={styles.actions}>
             <View style={styles.mainButtons}>
-              <PrimaryButton onPress={startNextWave} style={styles.actionButton} disabled={startWaveDisabled}>
+              <PrimaryButton onPress={startNextWave} style={styles.actionButton} disabled={wave.active}>
                 Start Wave
               </PrimaryButton>
               <PrimaryButton onPress={toggleShop} style={styles.actionButton}>
@@ -118,11 +122,6 @@ export function GameScreen() {
           onEvolveHero={() => {
             evolveHero();
           }}
-          disableBuyTower={disableBuyTower}
-          disableSummonMarine={disableSummonMarine}
-          disableSummonFirebat={disableSummonFirebat}
-          disableSummonHero={disableSummonHero}
-          disableEvolveHero={disableEvolveHero}
         />
       </View>
     </SafeAreaView>
@@ -144,25 +143,30 @@ const styles = StyleSheet.create({
     paddingBottom: theme.spacing.md,
     gap: theme.spacing.md,
   },
-  progressCard: {
-    backgroundColor: theme.colors.surfaceGlass,
+  laneSelector: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.xs,
+  },
+  laneButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: theme.radius.sm,
     borderWidth: 1,
-    borderColor: theme.colors.secondary,
-    borderRadius: theme.radius.md,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
+    borderColor: '#334155',
+    backgroundColor: '#111827',
   },
-  progressTitle: {
-    color: theme.colors.secondary,
+  laneButtonActive: {
+    borderColor: theme.colors.primary,
+    backgroundColor: '#0F2530',
+  },
+  laneLabel: {
+    color: theme.colors.textSecondary,
     fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1,
+    fontWeight: '600',
   },
-  progressText: {
-    color: theme.colors.textPrimary,
-    marginTop: 4,
-    fontSize: 13,
-    fontWeight: '500',
+  laneLabelActive: {
+    color: theme.colors.primary,
   },
   bottomPanel: {
     flexDirection: 'row',
