@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -32,9 +32,8 @@ export function GameScreen() {
   const {
     life,
     gold,
-    lanes,
-    selectedLane,
-    workers,
+    lines,
+    selectedLine,
     selectedWorkerId,
     isTowerPlacementMode,
     heroUnits,
@@ -52,82 +51,55 @@ export function GameScreen() {
     summonHero,
     evolveHero,
     triggerSkill,
-    tick,
   } = useGameStore();
 
   const [activeTab, setActiveTab] = useState<BottomTab>('battle');
+  const line = lines[selectedLine];
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      tick(100);
-    }, 100);
-
-    return () => {
-      clearInterval(interval);
-    };
-  }, [tick]);
-
-  const lane = lanes[selectedLane];
-
-  const lanePath = useMemo(
-    () => lane.cachedPath.map((p) => orientPoint(tileToPercent(p))),
-    [lane.cachedPath]
-  );
+  const lanePath = useMemo(() => line.cachedPath.map((p) => orientPoint(tileToPercent(p))), [line.cachedPath]);
 
   const laneDefenders = useMemo(() => {
-    const defs = lane.towers.map((tower) => ({
+    const defs = line.towers.map((tower) => ({
       id: tower.id,
       kind: 'tower' as const,
-      unitType: tower.hp > 260 ? ('firebat' as const) : ('marine' as const),
       position: orientPoint(tileToPercent({ x: tower.x, y: tower.y })),
-      range: 0,
-      damage: 0,
-      attackCooldownMs: 0,
-      cooldownRemainingMs: 0,
-      level: tower.hp > 260 ? 2 : 1,
-      laneId: tower.laneId,
+      level: tower.hp > 320 ? 2 : 1,
     }));
 
     const heroes = heroUnits
-      .filter((hero) => hero.laneId === selectedLane)
+      .filter((hero) => hero.lineId === selectedLine)
       .map((hero) => ({
         id: hero.id,
         kind: 'hero' as const,
-        unitType: 'hero' as const,
-        position: orientPoint({ x: hero.x, y: hero.y }),
-        range: 0,
-        damage: 0,
-        attackCooldownMs: 0,
-        cooldownRemainingMs: 0,
+        position: orientPoint(tileToPercent({ x: hero.x, y: hero.y })),
         level: hero.level,
-        laneId: hero.laneId,
       }));
 
-    return ([] as any[]).concat(defs, heroes);
-  }, [heroUnits, lane.towers, selectedLane]);
+    return defs.concat(heroes);
+  }, [heroUnits, line.towers, selectedLine]);
 
-  const laneWorkers = useMemo(() => lane.workers, [lane.workers]);
+  const laneWorkers = useMemo(
+    () => line.workers.map((worker) => ({ ...worker, ...orientPoint(tileToPercent({ x: worker.x, y: worker.y })) })),
+    [line.workers]
+  );
 
   const laneEnemies = useMemo(
-    () => lane.monsters.map((monster) => ({
-      id: monster.id,
-      laneId: monster.laneId,
-      hp: monster.hp,
-      maxHp: 180,
-      speed: monster.speed,
-      rewardGold: 0,
-      pathIndex: monster.pathIndex,
-      progress: 0,
-      alive: true,
-      position: orientPoint({ x: monster.x, y: monster.y }),
-    })),
-    [lane.monsters]
+    () =>
+      line.monsters.map((monster) => ({
+        id: monster.id,
+        hp: monster.hp,
+        maxHp: 180,
+        position: orientPoint(tileToPercent({ x: monster.x, y: monster.y })),
+      })),
+    [line.monsters]
   );
+
+  const cooldownRemainingMs = Math.max(0, skill.cooldown - (performance.now() - skill.lastUsed));
 
   const progressLabel =
     wave.active || wave.enemiesToSpawn > 0
-      ? `Line ${selectedLane + 1} · Wave ${wave.waveNumber} · Enemies ${lane.monsters.length}`
-      : `Line ${selectedLane + 1} 준비 완료`;
+      ? `Line ${selectedLine + 1} · Wave ${wave.waveNumber} · Enemies ${line.monsters.length}`
+      : `Line ${selectedLine + 1} 준비 완료`;
 
   const renderBottomPanel = () => {
     if (activeTab === 'shop') {
@@ -157,7 +129,7 @@ export function GameScreen() {
                 style={[styles.workerChip, selectedWorkerId === worker.id && styles.workerChipActive]}
               >
                 <Text style={styles.workerChipLabel}>
-                  {worker.id.replace('worker-', 'W')} · {worker.towerId ? 'Tower Ready' : worker.state}
+                  {worker.id.replace('worker-', 'W')} · {worker.assignedTowerId ? 'Tower Ready' : worker.state}
                 </Text>
               </Pressable>
             ))}
@@ -195,9 +167,9 @@ export function GameScreen() {
           </PrimaryButton>
           <SkillButton
             label="Skill"
-            isCoolingDown={skill.isCoolingDown}
-            cooldownRemainingMs={skill.cooldownRemainingMs}
-            cooldownTotalMs={skill.cooldownTotalMs}
+            isCoolingDown={cooldownRemainingMs > 0}
+            cooldownRemainingMs={cooldownRemainingMs}
+            cooldownTotalMs={skill.cooldown}
             onPress={triggerSkill}
           />
         </View>
@@ -211,16 +183,16 @@ export function GameScreen() {
         <HUD wave={wave.waveNumber} gold={gold} life={life} waveActive={wave.active} />
 
         <View style={styles.laneSelector}>
-          {lanes.map((_, laneId) => (
+          {lines.map((_, lineId) => (
             <Pressable
-              key={`lane-button-${laneId}`}
+              key={`lane-button-${lineId}`}
               onPress={() => {
-                selectLane(laneId);
+                selectLane(lineId);
               }}
-              style={[styles.laneButton, selectedLane === laneId && styles.laneButtonActive]}
+              style={[styles.laneButton, selectedLine === lineId && styles.laneButtonActive]}
             >
-              <Text style={[styles.laneLabel, selectedLane === laneId && styles.laneLabelActive]}>
-                Line {laneId + 1}
+              <Text style={[styles.laneLabel, selectedLine === lineId && styles.laneLabelActive]}>
+                Line {lineId + 1}
               </Text>
             </Pressable>
           ))}
@@ -229,7 +201,7 @@ export function GameScreen() {
         <View style={styles.fieldWrapper}>
           <Battlefield
             lane={lanePath}
-            castlePosition={orientPoint({ x: 50, y: 50 })}
+            castlePosition={orientPoint(tileToPercent({ x: 16, y: 30 }))}
             defenders={laneDefenders}
             enemies={laneEnemies}
             workers={laneWorkers}
@@ -245,7 +217,11 @@ export function GameScreen() {
             }}
           />
           <View style={styles.minimapWrap}>
-            <MiniMap lanes={lanes.map((laneState) => laneState.cachedPath.map(tileToPercent))} castlePosition={{ x: 50, y: 88 }} selectedLane={selectedLane} />
+            <MiniMap
+              lanes={lines.map((lineState) => lineState.cachedPath.map(tileToPercent))}
+              castlePosition={tileToPercent({ x: 16, y: 30 })}
+              selectedLane={selectedLine}
+            />
           </View>
         </View>
 
@@ -279,27 +255,27 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: Platform.OS === 'web' ? 1280 : undefined,
     alignSelf: 'center',
-    backgroundColor: theme.colors.background,
     paddingHorizontal: theme.spacing.md,
     paddingBottom: theme.spacing.sm,
     gap: theme.spacing.sm,
   },
   laneSelector: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    justifyContent: 'space-between',
     gap: theme.spacing.xs,
   },
   laneButton: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: theme.radius.sm,
+    flex: 1,
+    borderRadius: theme.radius.md,
     borderWidth: 1,
     borderColor: '#334155',
     backgroundColor: '#111827',
+    paddingVertical: 8,
+    alignItems: 'center',
   },
   laneButtonActive: {
     borderColor: theme.colors.primary,
-    backgroundColor: '#0F2530',
+    backgroundColor: '#172554',
   },
   laneLabel: {
     color: theme.colors.textSecondary,
@@ -307,37 +283,38 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   laneLabelActive: {
-    color: theme.colors.primary,
+    color: theme.colors.textPrimary,
   },
   fieldWrapper: {
     flex: 1,
-    position: 'relative',
-  },
-  minimapWrap: {
-    position: 'absolute',
-    left: 8,
-    bottom: 8,
-  },
-  battlePanel: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: theme.spacing.md,
-  },
-  battleActions: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
+    minHeight: 360,
     gap: theme.spacing.sm,
   },
+  minimapWrap: {
+    height: 100,
+  },
+  battlePanel: {
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: '#334155',
+    backgroundColor: '#0F172A',
+    padding: theme.spacing.sm,
+    gap: theme.spacing.sm,
+  },
+  battleActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    flexWrap: 'wrap',
+  },
   startButton: {
-    flex: 1,
+    minWidth: 120,
   },
   workersPanel: {
     borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: '#334155',
-    backgroundColor: '#111827',
+    backgroundColor: '#0F172A',
     padding: theme.spacing.sm,
     gap: theme.spacing.sm,
   },
@@ -352,55 +329,54 @@ const styles = StyleSheet.create({
     gap: theme.spacing.xs,
   },
   workerChip: {
+    borderRadius: theme.radius.pill,
     borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: theme.radius.sm,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+    borderColor: '#475569',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#111827',
   },
   workerChipActive: {
     borderColor: theme.colors.gold,
-    backgroundColor: '#2A1A08',
+    backgroundColor: '#1E293B',
   },
   workerChipLabel: {
-    color: theme.colors.textPrimary,
-    fontSize: 11,
+    color: theme.colors.textSecondary,
+    fontSize: 12,
     fontWeight: '600',
   },
   workerActions: {
     flexDirection: 'row',
     gap: theme.spacing.sm,
+    flexWrap: 'wrap',
   },
   workerActionButton: {
-    flex: 1,
-    minHeight: 42,
+    minWidth: 130,
   },
   tabBar: {
     flexDirection: 'row',
-    gap: theme.spacing.sm,
-    backgroundColor: '#0B1220',
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: '#1E293B',
-    padding: 6,
+    gap: theme.spacing.xs,
   },
   tabButton: {
     flex: 1,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: '#334155',
+    backgroundColor: '#0B1220',
+    paddingVertical: 10,
     alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: theme.radius.sm,
-    minHeight: 38,
   },
   tabButtonActive: {
-    backgroundColor: '#0F2530',
+    borderColor: theme.colors.primary,
+    backgroundColor: '#172554',
   },
   tabLabel: {
     color: theme.colors.textSecondary,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
-    letterSpacing: 0.8,
+    letterSpacing: 0.5,
   },
   tabLabelActive: {
-    color: theme.colors.primary,
+    color: theme.colors.textPrimary,
   },
 });
