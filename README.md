@@ -1,361 +1,162 @@
-# Welcome to your Expo app 👋
+# 6-Lane Castle Defense (Expo + React Native)
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+스타크래프트 유즈맵 감성의 **라인 디펜스 + RTS 워커 건설 시스템**을 목표로 만든 Expo 프로젝트입니다.
 
-## Get started
+현재 구현은 아래 핵심 컨셉을 포함합니다.
 
-1. Install dependencies
+- 6개 라인 중 하나를 선택해 전장 확인
+- 모든 라인은 중앙 캐슬로 수렴
+- 몬스터가 캐슬 도달 시 Life 감소
+- Worker 구매 → 이동 → 건설 → 타워 완성
+- 타워 완성 시점에만 길 차단 반영
+- 경로 막힘 시 건설 자동 취소(롤백)
+- 하단 탭(BATTLE / SHOP / WORKERS) 기반 UI
 
-   ```bash
-   npm install
-   ```
+---
 
-2. Start the app
+## 1. 프로젝트 개요
 
-   ```bash
-   npx expo start
-   ```
+- Framework: Expo + React Native + TypeScript
+- State: 커스텀 external store (`useSyncExternalStore`)
+- UI: 다크 테마 HUD, 전장, 미니맵, 하단 탭 패널
+- 핵심 설계: 엔진 로직(스토어)과 화면(UI) 분리
 
-In the output, you'll find options to open the app in a
+---
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+## 2. 현재 구현된 게임 시스템
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+### 2.1 라인/맵 구조
 
-## Get a fresh project
+- 라인은 총 6개
+- 메인 화면에는 **선택된 라인 1개만 표시**
+- 어떤 라인을 선택해도 표시상 캐슬이 화면 하단에 오도록 좌표 변환
+- 좌하단 미니맵에서 전체 라인 구조를 축소 표시
 
-When you're ready, run:
+### 2.2 Grid 기반 RTS 건설
 
-```bash
-npm run reset-project
+- 라인마다 32x32 타일 Grid
+- 타일 데이터
+  - `x`, `y`
+  - `walkable`
+  - `towerId`
+- Worker 상태 머신
+  - `idle`
+  - `moving`
+  - `building`
+
+### 2.3 Worker Build 파이프라인
+
+1. Worker 선택
+2. Build Mode 진입
+3. 타일 클릭으로 건설 요청
+4. 요청 시 가상 차단 경로 검증 (사전 path check)
+5. Worker가 타일로 이동
+6. 도착 후 2초 건설
+7. 완료 시 타일 차단(`walkable=false`)
+8. 완료 후 경로 재검증 실패 시 타워 제거 + 타일 복원
+
+> 즉, **건설 중에는 길을 막지 않고**, 완성 시점에만 길 차단을 확정합니다.
+
+### 2.4 타워/업그레이드 제약
+
+- Worker 1명당 타워 1개
+- Shop에서 Worker 구매
+- 선택 Worker의 타워 업그레이드 가능
+
+### 2.5 몬스터/웨이브
+
+- 웨이브 시작 시 라인 순환 스폰
+- 몬스터는 cachedPath 기반 이동
+- 경로 없으면 `attacking` 상태로 타워 공격
+- 타워 파괴 시 타일 복원 + 경로 재탐색
+- 캐슬 도달 시 Life 감소
+
+### 2.6 Hero/Skill
+
+- Hero는 캐슬 주변에서 스폰
+- Hero 진화 가능
+- Skill은 쿨다운 기반 광역 데미지 + 처치 골드 지급
+
+---
+
+## 3. UI/UX 구성
+
+### 상단
+
+- HUD: Wave / Gold / Life
+
+### 중앙
+
+- 선택 라인 전장
+- 타워, 워커, 몬스터, 경로 점, 캐슬 표시
+
+### 좌하단
+
+- 미니맵(전체 라인 축소)
+
+### 하단
+
+- Bottom Tabs: `BATTLE`, `SHOP`, `WORKERS`
+- 탭에 따라 하단 패널 전환
+  - BATTLE: 웨이브/스킬/히어로 카드
+  - SHOP: Worker 구매, Build, 업그레이드, Hero 관련 액션
+  - WORKERS: Worker 선택 및 Build Mode 제어
+
+---
+
+## 4. 주요 파일 구조
+
+```txt
+src/
+  components/
+    Battlefield.tsx   # 선택 라인 전장 렌더
+    HUD.tsx           # 상단 HUD
+    HeroCard.tsx      # 히어로 카드
+    MiniMap.tsx       # 좌하단 미니맵
+    PrimaryButton.tsx # 공통 버튼
+    ShopPanel.tsx     # SHOP 탭 패널
+    SkillButton.tsx   # 스킬 버튼
+  screens/
+    GameScreen.tsx    # 전체 화면 조합 및 탭 전환
+  store/
+    gameStore.ts      # 게임 엔진/상태/루프
+  theme/
+    theme.ts          # 디자인 토큰
+App.tsx               # 앱 엔트리
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+---
 
-## Learn more
+## 5. 실행 방법
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+npm install
+npx expo start
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+- Web: `npx expo start --web`
+- iOS: `npx expo run:ios`
+- Android: `npx expo run:android`
 
-## Join the community
+---
 
-Join our community of developers creating universal apps.
+## 6. 현재 우선순위 TODO
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- Worker 이동 경로 시각화(프리뷰 라인)
+- 건설 중 프로그레스 UI 고도화
+- 타워 타입 확장(범위/공속/특수효과)
+- 몬스터 타입 확장(보스/저항)
+- 라인별 유저 정보/점수 표현
+- 엔진 테스트 코드(순수 함수 레벨)
 
-Web + Expo (React Native) 기반 디펜스 게임 UI 시스템 문서
+---
 
-1. 프로젝트 개요
+## 7. 설계 원칙 요약
 
-이 문서는 모던 다크 테마 기반 디펜스 게임 UI 시스템 가이드입니다.
-웹(Expo Web)과 모바일(iOS/Android)을 동시에 고려한 확장형 HUD 중심 설계를 목표로 합니다.
+- 타일 기반 Grid
+- Worker 상태 머신
+- 완성 시점 차단
+- 이벤트 기반 경로 재탐색
+- 엔진/UI 분리
 
-핵심 원칙
-
-전투 중 가독성 최우선
-
-고대비 다크 테마
-
-네온 포인트 컬러
-
-최소한의 장식, 최대한의 정보 효율
-
-터치 중심 인터랙션
-
-2. 디자인 방향성
-키워드
-
-Minimal
-
-Tactical HUD
-
-Neon Accent
-
-Depth & Glass
-
-High Contrast
-
-목표
-
-빠른 의사결정이 필요한 디펜스 장르에 최적화
-
-복잡한 이펙트보다 정보 구조 명확성 우선
-
-모바일과 웹 모두 동일한 경험 제공
-
-3. 컬러 시스템
-Primary Palette
-역할	색상	HEX
-Background	Deep Navy	#0F172A
-Surface	Dark Slate	#1E293B
-Primary Accent	Neon Cyan	#22D3EE
-Secondary Accent	Violet	#8B5CF6
-Danger	Red	#EF4444
-Gold	Amber	#F59E0B
-Text Primary	Off White	#F8FAFC
-Text Secondary	Muted	#94A3B8
-사용 규칙
-
-Background는 항상 어둡게 유지
-
-인터랙션 요소는 Neon Cyan 중심
-
-경고는 Red
-
-보상/골드는 Amber
-
-등급 구분은 Violet 계열 활용
-
-4. 타이포그래피
-폰트 전략
-
-Title: Semi-Bold
-
-Numeric Stats: Bold
-
-Description: Regular
-
-권장 폰트
-
-Inter
-
-Space Grotesk
-
-Orbitron (HUD 숫자 전용)
-
-Expo 적용 예시
-{
-  fontFamily: 'Inter-Bold',
-  fontSize: 18
-}
-
-5. 레이아웃 구조
-기본 Game Screen 구조
---------------------------------
-|   Wave 12     Gold 320      |
---------------------------------
-|                              |
-|          Game Map            |
-|                              |
---------------------------------
-| Hero | Skill | Shop | Auto  |
---------------------------------
-
-구조 설명
-
-상단: 게임 상태 정보
-
-중앙: 맵 영역
-
-하단: 주요 액션 버튼
-
-Shop은 Bottom Sheet 형태
-
-6. HUD 디자인 시스템
-상단 정보 바
-
-반투명 Glass 스타일
-
-Blur + Border 사용
-
-{
-  backgroundColor: 'rgba(30,41,59,0.6)',
-  borderColor: '#22D3EE',
-  borderWidth: 1,
-  borderRadius: 12
-}
-
-표시 항목
-
-Wave
-
-Gold
-
-Life
-
-Speed Toggle
-
-Pause
-
-7. 버튼 디자인 시스템
-Primary Button
-
-네온 단색 또는 그라디언트
-
-Glow 효과
-
-{
-  backgroundColor: '#22D3EE',
-  paddingVertical: 14,
-  borderRadius: 14,
-  shadowColor: '#22D3EE',
-  shadowOpacity: 0.7,
-  shadowRadius: 10
-}
-
-Secondary Button
-
-Outline 스타일
-
-배경 투명
-
-{
-  borderWidth: 1,
-  borderColor: '#8B5CF6',
-  backgroundColor: 'transparent'
-}
-
-인터랙션 애니메이션
-
-Press 시 Scale 0.95 → 1
-
-약 120ms duration
-
-8. 영웅 카드 UI 시스템
-카드 구성
-[ 등급 프레임 ]
-[ 캐릭터 이미지 ]
-[ 이름 ]
-[ DPS / Range ]
-[ 진화 버튼 ]
-
-등급별 프레임 색상
-등급	색상
-Common	Gray
-Rare	Blue
-Epic	Purple
-Legendary	Gold
-Mythic	Neon Gradient
-디자인 원칙
-
-카드 radius: 16
-
-Surface 배경 사용
-
-Shadow는 은은하게
-
-9. 스킬 UI
-구조
-
-원형 버튼
-
-쿨다운 Progress Ring
-
-활성화 시 Pulse 애니메이션
-
-구현 기술
-
-react-native-svg
-
-react-native-reanimated
-
-10. 상점 UI (Shop Panel)
-구조
-
-Bottom Sheet Modal
-
-화면 높이의 70~80%
-
-배경 Blur 처리
-
-카드 구성
-[ 아이콘 ]
-[ 이름 ]
-[ 설명 ]
-[ 가격 ]
-[ 구매 버튼 ]
-
-11. 애니메이션 가이드
-이벤트	효과
-버튼 클릭	Scale
-영웅 소환	Glow + Particle
-진화	빛 확산 + 화면 흔들림
-보스 등장	화면 어둡게 + 경고 애니
-원칙
-
-과한 모션 금지
-
-200ms~400ms 범위 유지
-
-60fps 유지
-
-12. 반응형 전략
-모바일 기준
-
-390px width 기준 설계
-
-SafeAreaView 필수
-
-웹 기준
-
-최소 1280px 대응
-
-중앙 고정형 레이아웃
-
-HUD는 고정 포지션
-
-레이아웃 규칙
-
-Flex 기반 구성
-
-고정 픽셀 최소화
-
-퍼센트/비율 기반 설계
-
-13. 테마 시스템 (Expo 적용)
-export const theme = {
-  colors: {
-    background: '#0F172A',
-    surface: '#1E293B',
-    primary: '#22D3EE',
-    secondary: '#8B5CF6',
-    danger: '#EF4444',
-    gold: '#F59E0B',
-    text: '#F8FAFC',
-    muted: '#94A3B8'
-  },
-  radius: 14
-}
-
-14. 디자인 확장 전략
-
-시즌별 UI 색상 변경
-
-이벤트 기간 한정 HUD 스킨
-
-진화 단계별 카드 프레임 변화
-
-웨이브 증가에 따른 UI 포인트 색상 강화
-
-15. UX 최적화 체크리스트
-
-전투 중 텍스트 2줄 이상 금지
-
-수치 강조는 Bold
-
-터치 영역 최소 44px 이상
-
-중요 버튼은 하단 중앙 배치
-
-실수 방지 확인 팝업 최소화
-
-16. 향후 확장
-
-협동 모드 전용 HUD
-
-PvP 랭킹 화면
-
-로그라이크 모드 UI
-
-글로벌 출시 대비 언어 확장 구조
-
-결론
-
-이 UI 가이드는 단순한 디자인 문서가 아니라
-실제 구현 가능한 Expo 기반 게임 UI 시스템 설계 문서입니다.
+위 원칙을 유지하며 기능을 확장하면, Expo/Web 환경에서도 안정적으로 RTS형 디펜스 시스템을 발전시킬 수 있습니다.
